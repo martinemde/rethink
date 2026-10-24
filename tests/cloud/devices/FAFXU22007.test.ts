@@ -2071,6 +2071,52 @@ describe('FAFXU22007 reconciled controls', () => {
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
     })
 
+    test('newer queued power and remote-maintain intent suppress older accepted feedback', () => {
+        for (const key of ['power', 'remote_maintain']) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', EB_IDLE)
+            const before = ha.devices[DEVICE_ID].properties[key]
+            const first = before === 'ON' ? 'OFF' : 'ON'
+            dev.setProperty(key, first)
+            dev.setProperty(key, String(before))
+            const published: unknown[] = []
+            const publish = ha.publishProperty.bind(ha)
+            ha.publishProperty = (...args: Parameters<typeof publish>) => {
+                if (args[1] === key) published.push(args[2])
+                publish(...args)
+            }
+            if (key === 'power') {
+                const actual = currentRecord()
+                actual[21] = first === 'OFF' ? 0 : 1
+                thinq.emit('data', reply([2], actual))
+            } else thinq.emit('data', shortFrame([0x20, 0, 0x24, 0]))
+            assert.deepEqual(published, [])
+            assert.equal(ha.devices[DEVICE_ID].properties[key], before)
+            assert.equal(thinq.outbox.length, 2)
+            dev.drop()
+        }
+    })
+
+    test('remote-maintain timeout rejects late success and sends no queued command or retry', (ctx) => {
+        const original = global.setTimeout
+        let expire: (() => void) | undefined
+        ctx.mock.method(global, 'setTimeout', ((handler: () => void, timeout: number) => {
+            if (timeout === 3000) expire = handler
+            return original(() => {}, 1_000_000).unref()
+        }) as typeof setTimeout)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        const before = ha.devices[DEVICE_ID].properties.remote_maintain
+        dev.setProperty('remote_maintain', before === 'ON' ? 'OFF' : 'ON')
+        dev.setProperty('remote_maintain', String(before))
+        expire!()
+        thinq.emit('data', shortFrame([0x20, 0, 0x24, 0]))
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, before)
+        assert.equal(thinq.outbox.length, 1)
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /timed out/)
+        dev.drop()
+    })
+
     test('remote maintain refused or old-generation ACK never echoes', () => {
         for (const boundary of [false, true]) {
             const { ha, thinq, dev } = makeDevice()

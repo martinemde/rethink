@@ -1588,6 +1588,19 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
     })
 
+    test('newer queued power intent suppresses older accepted reply feedback', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_CONNECT)
+        dev.setProperty('power', 'OFF')
+        dev.setProperty('power', 'ON')
+        const off = Buffer.from(EB_CONNECT.subarray(15, 57))
+        off[13] = 0
+        thinq.emit('data', writeReply(thinq.outbox[0], off))
+        assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
+        assert.equal(thinq.outbox.length, 2)
+        dev.drop()
+    })
+
     test('power reply without record, stale record or refusal never echoes', () => {
         for (const variant of ['absent', 'stale', 'refused']) {
             const { ha, thinq, dev } = makeDevice()
