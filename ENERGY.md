@@ -29,3 +29,18 @@ them. The same washer evidence does not independently verify SideKick layout.
 
 Private captures are not committed. Analysis used saved local snapshots only;
 no appliance query, command, ACK or deployment was performed.
+
+## Household energy cross-check (user observation)
+
+The user reports an untracked household gap of about0.35kWh without the dryer,
+and about0.65kWh during a period in which the dryer reports3kWh. Assuming similar
+background untracked consumption, the incremental unexplained0.30kWh corresponds
+to about10% of reported dryer energy (an implied correction near1.10x if all of
+that increment were dryer under-reporting). This is a conditional estimate,
+not a measured bound: background loads and comparison intervals may differ.
+
+Working assumption: values are correctly scaled Wh, possibly with modest
+calibration error. Do not apply a correction factor. An isolated dryer circuit
+comparison is the planned way to verify calibration; no such test was performed
+or authorized by this note. This household cross-check concerns the dryer and
+does not independently calibrate the washer or SideKick.
