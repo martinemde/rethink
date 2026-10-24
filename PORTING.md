@@ -101,3 +101,15 @@ frames. Presentation keeps PR-native IDs while adding verified icons and events.
 
 Final offline result (2026-10-24): **1130/1130 tests passed**, TypeScript check,
 native build and `git diff --check` passed. No dependency files changed.
+
+## Energy scope update
+
+User requested SideKick energy after the initial selective port. It now exposes
+big-endian record bytes17/18 as `energy`, Wh, `total_increasing`, matching the
+local candidate implementation. This is the user's selected interpretation,
+not an independent calibration claim; previous energy-exclusion notes above
+apply to the initial port. No other SideKick candidates were added.
+
+Washer and dryer energy remain exactly upstream: washer LE16 at18, dryer BE16
+at17. Washer local BE16 at17 was deliberately not applied pending user review.
+The washer difference involves both offset and endianness, not endianness alone.
