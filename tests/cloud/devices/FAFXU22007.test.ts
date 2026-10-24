@@ -28,6 +28,23 @@ function notification(length = 121, prefix = [8, 11, 1, 11, 8, 2]) {
 }
 
 describe('FAFXU22007 verified local behavior', () => {
+    test('energy uses big-endian bytes17/18 independently of byte19, including carry and reset', () => {
+        const { ha, thinq } = makeDevice()
+        for (const [high, low, adjacent, expected] of [
+            [0, 255, 0, 255],
+            [1, 0, 0, 256],
+            [1, 2, 9, 258],
+            [0, 0, 9, 0],
+        ]) {
+            const frame = Buffer.from(EB_IDLE)
+            frame[15 + 17] = high
+            frame[15 + 18] = low
+            frame[15 + 19] = adjacent
+            thinq.emit('data', checksum(frame))
+            assert.equal(ha.devices[DEVICE_ID].properties.energy, expected)
+        }
+    })
+
     test('finish requires an observed active cycle and emits one non-retained event', () => {
         const { ha, thinq } = makeDevice()
         const events: unknown[][] = []

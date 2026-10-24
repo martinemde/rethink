@@ -146,7 +146,7 @@ const COURSE_OFFSET = 5
 const RESERVE_TIME_OFFSET = 11 // minutes, big-endian unlike the other counts
 const REMAIN_TIME_OFFSET = 14
 const INITIAL_TIME_OFFSET = 16
-const SPENT_POWER_OFFSET = 18 // Wh, cleared at power-on
+const SPENT_POWER_OFFSET = 17 // Wh, big-endian; user-selected local interpretation
 const LOADED_COURSE_OFFSET = 20 // = rec[5], except where rec[5] is 0xff (a downloaded course)
 const STATE_OFFSET = 21
 const TUB_CLEAN_COUNT_OFFSET = 28
@@ -1296,7 +1296,7 @@ export default class Device extends AABBDevice {
                   : rec.readUInt16LE(REMAIN_TIME_OFFSET),
         )
         this.publishProperty('initial_time', isOff ? 0 : rec[INITIAL_TIME_OFFSET])
-        this.publishProperty('energy', rec.readUInt16LE(SPENT_POWER_OFFSET))
+        this.publishProperty('energy', rec.readUInt16BE(SPENT_POWER_OFFSET))
         this.publishProperty('reserve_time', rec.readUInt16BE(RESERVE_TIME_OFFSET))
         this.publishProperty('delay_start', (rec[OPT5_OFFSET] & OPT5_DELAY_START) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('tub_clean_count', rec[TUB_CLEAN_COUNT_OFFSET])
