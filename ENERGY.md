@@ -1,0 +1,31 @@
+# Energy counter decoding evidence
+
+Saved washer capture evidence supports **BE16 at record offset17**, rather than
+upstream PR204's LE16 at offset18. Both the byte offset and byte order matter.
+The accepted local decoding is now used by the washer handler.
+
+## Observed counter carries
+
+CRC/length-valid EB51 reports during the same TubClean run on2026-10-23 UTC:
+
+| UTC (first received value) | Record bytes17–19 (hex) | BE16@17 | Upstream LE16@18 |
+| --- | --- | ---: | ---: |
+| 03:08:54.335 | `00 FC 00` | 252 | 252 |
+| 03:09:10.260 | `01 00 00` | 256 | 0 |
+| 03:24:31.934 | `01 E0 00` | 480 | 224 |
+| 03:24:47.829 | `02 02 00` | 514 | 2 |
+
+Course85 and state41 remain unchanged at both carries. These are EB reports,
+not stale first halves of EC frames. Repeated receipts occurred between first
+changes; do not interpret the last retry-to-next-report gap as measurement
+cadence. Upstream loses the high byte and rolls backwards at both carries,
+while BE16 preserves the increasing counter.
+
+This is evidence for the **counter layout**. It does not independently prove
+Wh calibration or every reset/accumulation rule. Byte19 was zero in the reviewed
+records; no unrelated byte19-driven jump is claimed. Small values when both
+bytes17 and19 are zero are identical under both formulas and cannot distinguish
+them. The same washer evidence does not independently verify SideKick layout.
+
+Private captures are not committed. Analysis used saved local snapshots only;
+no appliance query, command, ACK or deployment was performed.

@@ -1,5 +1,9 @@
 # Local enhancements on PR204
 
+Read the later scope-update sections as superseding the initial exclusions.
+Current scope includes user-approved energy, SideKick provisional phases, total
+time and completion; other raw diagnostic candidates remain excluded.
+
 Base: upstream PR204 `e1f5b0d612435da15e5fcb8ee331cdf9a521251f`.
 This branch is for offline review; it is not deployed.
 
@@ -113,3 +117,20 @@ apply to the initial port. No other SideKick candidates were added.
 Washer and dryer energy remain exactly upstream: washer LE16 at18, dryer BE16
 at17. Washer local BE16 at17 was deliberately not applied pending user review.
 The washer difference involves both offset and endianness, not endianness alone.
+
+## Expanded user-authorized scope
+
+The user subsequently requested the remaining provisional SideKick phases,
+completion notification and total-time field, plus local energy decoding.
+These additions intentionally supersede the initial conservative exclusions.
+Washer energy now uses BE16 at17 (rather than upstream LE16 at18), dryer already
+uses BE16 at17, and SideKick keeps BE16 at17. Units/statistics remain Wh and
+`total_increasing`. Calibration is not claimed by the port itself.
+
+SideKick's total-time LE16 at16 overlaps the high byte of the energy field at17;
+the observed zero high total byte does not settle field width for all cycles.
+Provisional phase labels and the completion signature retain that evidence limit.
+
+Washer BE16@17 is supported by two saved within-run high-byte carries where
+upstream LE16@18 drops backwards. See `ENERGY.md`; this establishes counter
+layout evidence separately from Wh calibration.
