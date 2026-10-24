@@ -1,5 +1,8 @@
 # Local enhancements on PR204
 
+Current policy: historical HA migration is dropped, not pending. SideKick
+fields and events are supported features, not provisional entities. Confidence
+classification is removed; concrete mismatches belong in debugging notes.
 Read the later scope-update sections as superseding the initial exclusions.
 Current scope includes user-approved energy, SideKick provisional phases, total
 time and completion; other raw diagnostic candidates remain excluded.
