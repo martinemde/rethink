@@ -3,8 +3,9 @@ import { Device as Thinq2Device } from '../thinq2/device'
 import { type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
-import AABBDevice from './aabb_device'
+import AABBDevice, { type AwaitedWrite } from './aabb_device'
 import { Enum } from '@/util/enum'
+import crc16 from '@/util/crc16'
 
 // LG DLEX6700B electric dryer. BDH_D30007_US's framing and 42-byte record, but with a temperature
 // setting and different option bits.
@@ -45,10 +46,6 @@ const SINGLE_STATUS_FRAME_TYPE = 0xeb
 const SINGLE_INNER_LEN = RECORD_LEN
 const SINGLE_RECORD_OFFSET = 13
 const SINGLE_BUF_LEN = 13 + SINGLE_INNER_LEN + 1
-
-// Answered with an 0xEB record. Sent as a write is, so a write queued behind it is built from the answer.
-const STATUS_REQUEST = 'F0ED112101000000180411120000'
-const STATUS_REQUEST_TYPE = 0xed
 
 // Set property:
 //
@@ -108,7 +105,6 @@ const EVENT_FRAME_TYPE = 0x03
 const EVENT_INNER_LEN = 18
 const EVENT_PAYLOAD_OFFSET = 13
 
-const EVENT_ID_OFFSET = 0
 const EVENT_POWER_OFFSET = 9
 const EVENT_DOOR_OFFSET = 16
 
@@ -121,6 +117,8 @@ const COURSE_OFFSET = 5
 const REMAIN_TIME_OFFSET = 9 // minutes, big-endian
 const INITIAL_TIME_OFFSET = 11 // minutes, big-endian
 const STATE_OFFSET = 13
+// Bound accepted baselines and confirmed report protection; never publish requested values alone.
+const CONFIRMATION_WINDOW_MS = 30_000
 const SPENT_POWER_OFFSET = 17 // Wh, big-endian
 const BUZZER_OFFSET = 19
 const DOWNLOADED_COURSE_OFFSET = 23 // while rec[5] is 0xff
@@ -155,7 +153,7 @@ const STATE_POWEROFF = 0
 // modelJSON state indices
 const STATE = Enum.of({
     Off: 0,
-    Initial: 1,
+    Standby: 1,
     Running: 2,
     Pause: 3,
     End: 4,
@@ -226,9 +224,9 @@ const DRY_LEVEL = Enum.of({
 // 0 on Air Dry and Rack Dry
 const TEMP = Enum.of({
     Low: 1,
-    'Medium Low': 2,
+    'Med. Low': 2,
     Medium: 3,
-    'Medium High': 4,
+    'Med. High': 4,
     High: 5,
 })
 
@@ -277,18 +275,29 @@ const bit = (byte: number, mask: number) => ((byte & mask) !== 0 ? 1 : 0)
 
 export default class Device extends AABBDevice {
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
-        super(HA, thinq, true)
+        super(HA, thinq, false)
         this.setConfig(
             allowExtendedType({
                 ...HADevice.config(meta, { name: 'LG Dryer' }),
                 components: {
                     power: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-power',
                         state_topic: '$this/power',
                         command_topic: '$this/power/set',
+                        retain: false,
+                        optimistic: false,
                         name: 'Power',
-                        icon: 'mdi:tumble-dryer',
+                        icon: 'mdi:power',
+                    },
+                    cycle_finished: {
+                        platform: 'event',
+                        unique_id: '$deviceid-cycle_finished',
+                        state_topic: '$this/cycle_finished',
+                        name: 'Cycle finished',
+                        event_types: ['finished'],
+                        enabled_by_default: true,
                     },
                     status: {
                         platform: 'sensor',
@@ -304,30 +313,35 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-course',
                         state_topic: '$this/course',
                         command_topic: '$this/course/set',
+                        retain: false,
+                        optimistic: false,
                         options: [...COURSE.options, ...DOWNLOADED_COURSE.options],
                         name: 'Course',
-                        icon: 'mdi:pin-outline',
+                        icon: 'mdi:tumble-dryer',
                     },
                     start: {
                         platform: 'button',
                         unique_id: '$deviceid-start',
                         command_topic: '$this/start/set',
+                        retain: false,
                         payload_press: '',
                         name: 'Start',
-                        icon: 'mdi:play-circle-outline',
+                        icon: 'mdi:play',
                     },
                     pause: {
                         platform: 'button',
                         unique_id: '$deviceid-pause',
                         command_topic: '$this/pause/set',
+                        retain: false,
                         payload_press: '',
                         name: 'Pause',
-                        icon: 'mdi:pause-circle-outline',
+                        icon: 'mdi:pause',
                     },
                     resume: {
                         platform: 'button',
                         unique_id: '$deviceid-resume',
                         command_topic: '$this/resume/set',
+                        retain: false,
                         payload_press: '',
                         name: 'Resume',
                         icon: 'mdi:play-pause',
@@ -337,6 +351,8 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-dry_level',
                         state_topic: '$this/dry_level',
                         command_topic: '$this/dry_level/set',
+                        retain: false,
+                        optimistic: false,
                         options: DRY_LEVEL.options,
                         name: 'Dry level',
                         icon: 'mdi:water-percent',
@@ -346,6 +362,8 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-temp',
                         state_topic: '$this/temp',
                         command_topic: '$this/temp/set',
+                        retain: false,
+                        optimistic: false,
                         options: TEMP.options,
                         name: 'Temperature',
                         icon: 'mdi:thermometer',
@@ -355,6 +373,8 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-dry_time',
                         state_topic: '$this/dry_time',
                         command_topic: '$this/dry_time/set',
+                        retain: false,
+                        optimistic: false,
                         min: DRY_TIME_MIN,
                         max: DRY_TIME_MAX,
                         step: DRY_TIME_STEP,
@@ -362,7 +382,7 @@ export default class Device extends AABBDevice {
                         device_class: 'duration',
                         unit_of_measurement: 'min',
                         name: 'Dry time',
-                        icon: 'mdi:timer-edit-outline',
+                        icon: 'mdi:timer-outline',
                     },
                     remaining_time: {
                         platform: 'sensor',
@@ -377,7 +397,7 @@ export default class Device extends AABBDevice {
                         platform: 'sensor',
                         unique_id: '$deviceid-initial_time',
                         state_topic: '$this/initial_time',
-                        name: 'Initial time',
+                        name: 'Total Time',
                         icon: 'mdi:timer-sand',
                         device_class: 'duration',
                         unit_of_measurement: 'min',
@@ -398,9 +418,12 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-buzzer',
                         state_topic: '$this/buzzer',
                         command_topic: '$this/buzzer/set',
+                        retain: false,
+                        optimistic: false,
                         options: BUZZER.options,
                         name: 'Buzzer',
                         icon: 'mdi:volume-high',
+                        entity_category: 'config',
                     },
                     door: {
                         platform: 'binary_sensor',
@@ -418,69 +441,91 @@ export default class Device extends AABBDevice {
                     },
                     steam: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-steam',
                         state_topic: '$this/steam',
                         command_topic: '$this/steam/set',
+                        retain: false,
+                        optimistic: false,
                         name: 'Steam',
-                        icon: 'mdi:weather-fog',
+                        icon: 'mdi:weather-windy',
                     },
                     wrinkle_care: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-wrinkle_care',
                         state_topic: '$this/wrinkle_care',
                         command_topic: '$this/wrinkle_care/set',
+                        retain: false,
+                        optimistic: false,
                         name: 'Wrinkle care',
-                        icon: 'mdi:iron-outline',
+                        icon: 'mdi:iron',
                     },
                     low_static: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-low_static',
                         state_topic: '$this/low_static',
                         command_topic: '$this/low_static/set',
+                        retain: false,
+                        optimistic: false,
                         name: 'Low static',
-                        icon: 'mdi:flash-off-outline',
+                        icon: 'mdi:lightning-bolt-outline',
                     },
                     damp_dry_signal: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-damp_dry_signal',
                         state_topic: '$this/damp_dry_signal',
                         command_topic: '$this/damp_dry_signal/set',
+                        retain: false,
+                        optimistic: false,
                         name: 'Damp dry signal',
-                        icon: 'mdi:bell-outline',
+                        icon: 'mdi:water-percent',
                     },
                     energy_saver: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-energy_saver',
                         state_topic: '$this/energy_saver',
                         command_topic: '$this/energy_saver/set',
+                        retain: false,
+                        optimistic: false,
                         name: 'Energy saver',
                         icon: 'mdi:leaf',
                     },
                     keep_fresh: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-keep_fresh',
                         state_topic: '$this/keep_fresh',
                         command_topic: '$this/keep_fresh/set',
+                        retain: false,
+                        optimistic: false,
                         name: 'KeepFresh',
-                        icon: 'mdi:rotate-3d-variant',
+                        icon: 'mdi:weather-windy',
                     },
                     cycle_optimization: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-cycle_optimization',
                         state_topic: '$this/cycle_optimization',
                         command_topic: '$this/cycle_optimization/set',
+                        retain: false,
+                        optimistic: false,
                         name: 'Cycle optimization',
                         icon: 'mdi:auto-fix',
-                        entity_category: 'config',
                     },
                     splash_screen: {
                         platform: 'select',
                         unique_id: '$deviceid-splash_screen',
                         state_topic: '$this/splash_screen',
                         command_topic: '$this/splash_screen/set',
+                        retain: false,
+                        optimistic: false,
                         options: SPLASH_SCREEN.options,
                         name: 'Splash screen',
-                        icon: 'mdi:monitor-shimmer',
+                        icon: 'mdi:monitor',
                         entity_category: 'config',
                     },
                     control_lock: {
@@ -504,7 +549,7 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-remote_maintain',
                         state_topic: '$this/remote_maintain',
                         name: 'Remote maintain standby',
-                        icon: 'mdi:cellphone-wireless',
+                        icon: 'mdi:remote',
                         entity_category: 'diagnostic',
                     },
                     problem: {
@@ -529,16 +574,15 @@ export default class Device extends AABBDevice {
     }
 
     start() {
-        this.send(Buffer.from(STATUS_REQUEST, 'hex'))
         this.publishProblem()
     }
 
-    private pendingPower?: string
+    private completionState: 'unarmed' | 'armed' | 'completed' = 'unarmed'
 
     // Why the last command from HA failed; cleared by the next one that goes through, or, for NO_COURSE_REASON,
     // by a record with a course.
     private problem?: string
-    private course?: { code: number; on: boolean }
+    private course?: { code: number; downloaded: number; on: boolean }
 
     private setProblem(reason: string | undefined) {
         if (reason === this.problem) return
@@ -553,56 +597,192 @@ export default class Device extends AABBDevice {
 
     // BUNDLE values from the last record, plus writes not yet reflected in one
     private readonly bundle = new Map<BundleKey, number>()
-    // Changes from HA not yet sent, which a record arriving before they go out must not undo
-    private readonly unsent = new Map<BundleKey, number>()
+    protected readonly strictWriteTracking = true
+    private generation = 0
+    private previousCourse?: { identity: string; current: string; expires: number }
+    private readonly sentContext: { generation: number; reported: Map<number, number> }[] = []
+    private readonly reported = new Map<number, number>()
+    private readonly accepted = new Map<number, { value: number; expires: number; confirmed: boolean }>()
+    private pendingBundle?: Map<BundleKey, number>
+    private group = 0
+    private readonly pending = new Map<number, { value: number; owner: object }>()
+
+    protected writeTimedOut(_writes: readonly AwaitedWrite[]) {
+        this.accepted.clear()
+        this.pending.clear()
+        this.pendingBundle = undefined
+        this.bundle.clear()
+        this.sentContext.length = 0
+        this.setProblem('Command timed out: reconnect required')
+    }
+
+    private boundary() {
+        this.generation++
+        this.previousCourse = undefined
+        this.accepted.clear()
+        this.bundle.clear()
+    }
+
+    drop() {
+        this.accepted.clear()
+        this.pending.clear()
+        this.pendingBundle = undefined
+        this.sentContext.length = 0
+        super.drop()
+    }
+
+    private writable(power = false) {
+        if (this.writesBlocked) return false
+        const reason = power ? undefined : !this.course ? NO_STATUS_REASON : !this.course.on ? OFF_REASON : undefined
+        if (reason) this.setProblem(reason)
+        return reason === undefined
+    }
+
+    private propertyValues(inner: Buffer) {
+        const values = new Map<number, number>()
+        if (inner.length < 7) return undefined
+        let at = 7
+        for (let i = 0; i < inner[6]; i++) {
+            const prop = inner[at++]
+            const width = prop === 0x70 ? 2 : 1
+            if (values.has(prop) || at + width > inner.length) return undefined
+            values.set(prop, width === 2 ? inner.readUInt16BE(at) : inner[at])
+            at += width
+        }
+        return at === inner.length ? values : undefined
+    }
+
+    private recordValues(rec: Buffer) {
+        return new Map<number, number>([
+            [PROP_POWER, rec[STATE_OFFSET] === 0 ? 0 : 1],
+            [PROP_COURSE, rec[COURSE_OFFSET]],
+            [PROP_DOWNLOADED_COURSE, rec[DOWNLOADED_COURSE_OFFSET]],
+            [PROP_BUZZER, rec[BUZZER_OFFSET]],
+            [PROP_SPLASH_SCREEN, rec[SPLASH_SCREEN_OFFSET]],
+            [PROP_KEEP_FRESH, bit(rec[OPT5_OFFSET], OPT5_KEEP_FRESH)],
+            [PROP_CYCLE_OPTIMIZATION, bit(rec[OPT4_OFFSET], OPT4_CYCLE_OPTIMIZATION)],
+            ...BUNDLE.map(
+                ({ prop, key }) =>
+                    [
+                        prop,
+                        key === 'temp'
+                            ? rec[TEMP_OFFSET]
+                            : key === 'dry_level'
+                              ? rec[DRY_LEVEL_OFFSET]
+                              : key === 'dry_time'
+                                ? rec[COURSE_OFFSET] === COURSE_TIMED_DRY
+                                    ? rec.readUInt16BE(INITIAL_TIME_OFFSET)
+                                    : 0
+                                : key === 'steam'
+                                  ? bit(rec[OPT2_OFFSET], OPT2_STEAM)
+                                  : key === 'energy_saver'
+                                    ? bit(rec[OPT2_OFFSET], OPT2_ENERGY_SAVER)
+                                    : bit(
+                                          rec[OPT1_OFFSET],
+                                          key === 'low_static'
+                                              ? OPT1_LOW_STATIC
+                                              : key === 'wrinkle_care'
+                                                ? OPT1_WRINKLE_CARE
+                                                : OPT1_DAMP_DRY_SIGNAL,
+                                      ),
+                    ] as [number, number],
+            ),
+        ])
+    }
+
+    private baseline(prop: number, raw: number) {
+        const accepted = this.accepted.get(prop)
+        if (!accepted) return raw
+        if (Date.now() >= accepted.expires) {
+            this.accepted.delete(prop)
+            if (raw !== accepted.value) this.setProblem('Accepted setting not reflected before confirmation expired')
+            return raw
+        }
+        return accepted.value
+    }
+
+    private publishSetting(prop: number, key: string, raw: number, value: string | number | undefined) {
+        if (this.pending.has(prop) && this.pending.get(prop)?.value !== raw) return
+        const accepted = this.accepted.get(prop)
+        if (accepted && raw === accepted.value && !this.pending.has(prop)) accepted.confirmed = true
+        if (accepted && Date.now() < accepted.expires && accepted.confirmed && raw !== accepted.value) return
+        this.publishProperty(key, value)
+    }
 
     private writeProps(...pairs: number[]) {
-        const inner = Buffer.from([...SET_PROPERTY, pairs.length / 2, ...pairs])
-        this.queueWrite(() => inner)
+        if (!this.writable(pairs[0] === PROP_POWER)) return
+        if (this.pendingBundle) this.group++
+        this.pendingBundle = undefined
+        const prop = pairs[0]
+        const owner = {}
+        this.pending.set(prop, { value: pairs[1], owner })
+        const header = [...SET_PROPERTY]
+        if (prop === PROP_BUZZER) header[5] = 0x34
+        const inner = Buffer.from([...header, pairs.length / 2, ...pairs])
+        const barrier = [PROP_POWER, PROP_COURSE, PROP_CYCLE, PROP_CYCLE_OPTIMIZATION].includes(prop)
+        if (barrier) this.group++
+        const group = this.group
+        this.queueWrite(
+            () => {
+                if (this.pending.get(prop)?.owner === owner) this.pending.delete(prop)
+                if (!this.writable(prop === PROP_POWER)) return
+                if (prop === PROP_CYCLE && (!this.course?.code || this.course.code === COURSE_DOWNLOADED)) {
+                    this.setProblem(NO_COURSE_REASON)
+                    return
+                }
+                return inner
+            },
+            barrier ? undefined : `singleton:${group}:${prop}`,
+        )
     }
 
     protected writeType(inner: Buffer) {
         if (inner[0] !== SET_PROPERTY[0]) return undefined
         const type = inner[1]
-        return type === SET_PROPERTY[1] || type === COMMAND_TYPE || type === STATUS_REQUEST_TYPE ? type : undefined
+        if (type === SET_PROPERTY[1])
+            this.sentContext.push({ generation: this.generation, reported: new Map(this.reported) })
+        return type === SET_PROPERTY[1] || type === COMMAND_TYPE ? type : undefined
     }
 
-    // The bundle is built when it goes out, from the dryer's settings. Powered on at the panel, the dryer
-    // sends no record, so unless the last one showed it on, its status is asked for first.
+    // Build only from passively received settings; missing context never triggers a query.
     private writeBundle(key: BundleKey, value: number) {
-        // the bundle would carry temperature 0, which the dryer refuses
-        if (this.course?.on && this.course.code === NO_COURSE) return this.setProblem(NO_COURSE_REASON)
-        // the app clears Energy Saver on any dry level change
-        if (key === 'dry_level' && (this.unsent.get(key) ?? this.bundle.get(key)) !== value)
-            this.unsent.set('energy_saver', 0)
-        this.unsent.set(key, value)
-        if (!this.course?.on) this.queueWrite(() => (this.course?.on ? undefined : Buffer.from(STATUS_REQUEST, 'hex')))
+        if (!this.writable()) return
+        if (this.course?.code === NO_COURSE) return this.setProblem(NO_COURSE_REASON)
+        if (!this.pendingBundle) this.group++
+        const edits = (this.pendingBundle ??= new Map<BundleKey, number>())
+        if (key === 'dry_level' && (edits.get(key) ?? this.bundle.get(key)) !== value) edits.set('energy_saver', 0)
+        edits.set(key, value)
+        for (const [k, val] of edits)
+            this.pending.set(BUNDLE.find((entry) => entry.key === k)!.prop, { value: val, owner: edits })
+        const group = this.group
         this.queueWrite(() => {
-            const reason = !this.course
-                ? NO_STATUS_REASON
-                : !this.course.on
-                  ? OFF_REASON
-                  : this.course.code === NO_COURSE
-                    ? NO_COURSE_REASON
-                    : undefined
-            if (reason !== undefined || this.bundle.size !== BUNDLE.length) {
-                this.unsent.clear()
-                this.setProblem(reason ?? NO_STATUS_REASON)
-                return undefined
+            if (this.pendingBundle === edits) this.pendingBundle = undefined
+            for (const k of edits.keys()) {
+                const prop = BUNDLE.find((entry) => entry.key === k)!.prop
+                if (this.pending.get(prop)?.owner === edits) this.pending.delete(prop)
             }
-            for (const [k, v] of this.unsent) this.bundle.set(k, v)
-            this.unsent.clear()
-            // Timed Dry has a dry time and no dry level, every other course the reverse, as the app writes
-            // them. The dryer applies a dry level sent on Timed Dry (answering 0x17), and its panel then
-            // draws the dry level over the dry time.
-            if (this.course!.code === COURSE_TIMED_DRY) this.bundle.set('dry_level', 0)
-            else this.bundle.set('dry_time', 0)
+            if (!this.writable()) return
+            if (this.course?.code === NO_COURSE || this.bundle.size !== BUNDLE.length) {
+                this.setProblem(this.course?.code === NO_COURSE ? NO_COURSE_REASON : NO_STATUS_REASON)
+                return
+            }
+            if (edits.has('dry_time') && this.course?.code !== COURSE_TIMED_DRY) {
+                this.setProblem(DRY_TIME_REASON)
+                return
+            }
+            if (edits.has('dry_level') && this.course?.code === COURSE_TIMED_DRY) {
+                this.setProblem(TIMED_DRY_LEVEL_REASON)
+                return
+            }
+            const values = new Map(BUNDLE.map(({ prop, key }) => [key, this.baseline(prop, this.bundle.get(key)!)]))
+            for (const [k, val] of edits) values.set(k, val)
+            values.set(this.course?.code === COURSE_TIMED_DRY ? 'dry_level' : 'dry_time', 0)
             const body = BUNDLE.flatMap(({ prop, key, width }) => {
-                const v = this.bundle.get(key)!
-                return width === 2 ? [prop, v >> 8, v & 0xff] : [prop, v]
+                const val = values.get(key)!
+                return width === 2 ? [prop, val >> 8, val & 0xff] : [prop, val]
             })
             return Buffer.from([...SET_PROPERTY, BUNDLE.length, ...body])
-        })
+        }, `bundle:${group}`)
     }
 
     setProperty(prop: string, value: string) {
@@ -615,7 +795,6 @@ export default class Device extends AABBDevice {
 
         if (prop === 'power') {
             if (value !== 'ON' && value !== 'OFF') return
-            this.pendingPower = value
             this.writeProps(PROP_POWER, value === 'ON' ? 1 : 0)
         } else if (prop === 'buzzer') {
             const idx = BUZZER.unmap(value)
@@ -654,10 +833,31 @@ export default class Device extends AABBDevice {
         }
     }
 
+    // Validate complete wire frames before the base strips checksum bytes. Keep its queue owner.
+    processData(frame: Buffer) {
+        if (frame.length < 4 || frame[0] !== 0xaa || frame[frame.length - 1] !== 0xbb) return
+        if (frame[1] === 0xff) {
+            if (
+                frame.length < 18 ||
+                frame[2] !== CLASS_BYTE ||
+                frame[3] !== ENVELOPE_TYPE ||
+                frame.readUInt16BE(4) !== frame.length ||
+                frame.readUInt16BE(13) + 18 !== frame.length ||
+                crc16(frame.subarray(0, -3)) !== frame.readUInt16BE(frame.length - 3)
+            )
+                return
+        } else {
+            if (frame[1] !== frame.length) return
+            const sum = frame.subarray(0, -2).reduce((a, b) => a + b, 0)
+            if (((sum & 0xff) ^ 0x55) !== frame[frame.length - 2]) return
+        }
+        super.processData(frame)
+    }
+
     processAABB(buf: Buffer) {
         if (buf.length < 2 || buf[0] !== CLASS_BYTE) return
         if (buf[1] === WRITE_REPLY_TYPE) return this.processWriteReply(buf)
-        if (buf[1] === COMMAND_REPLY_TYPE && buf[2] === COMMAND_TYPE) {
+        if (buf.length === 4 && buf[1] === COMMAND_REPLY_TYPE && buf[2] === COMMAND_TYPE) {
             this.writeAnswered(COMMAND_TYPE)
             return
         }
@@ -670,9 +870,22 @@ export default class Device extends AABBDevice {
                 return this.processStatus(buf, STATUS_RECORD_OFFSET, STATUS_BUF_LEN)
             case SINGLE_STATUS_FRAME_TYPE:
                 if (innerLen !== SINGLE_INNER_LEN) return
-                this.writeAnswered(STATUS_REQUEST_TYPE)
                 return this.processStatus(buf, SINGLE_RECORD_OFFSET, SINGLE_BUF_LEN)
             case EVENT_FRAME_TYPE:
+                if (
+                    innerLen === 28 &&
+                    buf
+                        .subarray(EVENT_PAYLOAD_OFFSET, EVENT_PAYLOAD_OFFSET + 6)
+                        .equals(Buffer.from([0x03, 0x0a, 0x02, 0x04, 0x03, 0x03]))
+                ) {
+                    if (this.completionState === 'armed') {
+                        this.completionState = 'completed'
+                        this.HA.publishProperty(this.id, 'cycle_finished', JSON.stringify({ event_type: 'finished' }), {
+                            retain: false,
+                        })
+                    }
+                    return
+                }
                 if (innerLen !== EVENT_INNER_LEN || buf.length < EVENT_PAYLOAD_OFFSET + EVENT_INNER_LEN) return
                 return this.processEvent(buf.subarray(EVENT_PAYLOAD_OFFSET, EVENT_PAYLOAD_OFFSET + EVENT_INNER_LEN))
         }
@@ -681,84 +894,178 @@ export default class Device extends AABBDevice {
     // Only a reply to a write from HA counts toward the problem sensor: one to the cloud's says nothing
     // about ours.
     private processWriteReply(buf: Buffer) {
-        const write = this.writeAnswered(SET_PROPERTY[1])
+        if (buf.length < 7 || !buf.subarray(0, 6).equals(Buffer.from([0x30, 0xe6, 0, 2, 1, 0xff]))) return
+        const count = buf[6]
+        if (count === undefined) return
+        const end = 7 + count * 2
+        if (buf.length !== end && buf.length !== end + RECORD_LEN) return
+        const props = new Set<number>()
+        for (let i = 0; i < count; i++) props.add(buf[7 + i * 2])
+        if (props.size !== count) return
+        const write = this.writeAnswered(SET_PROPERTY[1], (candidate) => {
+            const values = this.propertyValues(candidate.inner)
+            return !!values && values.size === props.size && [...values.keys()].every((prop) => props.has(prop))
+        })
         if (!write) return
-        this.takeInWrite(write.inner, buf)
+        const context = this.sentContext.shift()
+        if (context?.generation === this.generation) this.takeInWrite(write.inner, buf, context.reported)
         if (!write.own) return
-        const count = buf[WRITE_REPLY_PROP_OFFSET - 1] ?? 0
         const failed = [...Array(count).keys()]
             .map((i) => buf[WRITE_REPLY_RESULT_OFFSET + 2 * i])
             .find((result) => result !== undefined && !WRITE_OK.has(result))
         this.setProblem(failed === undefined ? undefined : `Command refused (0x${hex2(failed)})`)
-        if (buf.length <= WRITE_REPLY_RESULT_OFFSET || buf[WRITE_REPLY_PROP_OFFSET] !== PROP_POWER) return
-        const value = this.pendingPower
-        this.pendingPower = undefined
-        if (value !== undefined && buf[WRITE_REPLY_RESULT_OFFSET] !== WRITE_REFUSED)
-            this.publishProperty('power', value)
     }
 
     // What a write changed, the app's or ours, is taken in from its reply: the next record can be seconds
     // away, or never come, and a bundle from HA built without it would undo the change. A course change
     // comes from the reply's record, with the course's defaults; bundle settings from the write itself,
     // where the dryer accepted them.
-    private takeInWrite(inner: Buffer, reply: Buffer) {
+    private courseIdentity(code: number, downloaded: number) {
+        return `${code}:${code === COURSE_DOWNLOADED ? downloaded : 0}`
+    }
+
+    private takeInWrite(inner: Buffer, reply: Buffer, before: Map<number, number>) {
+        const values = this.propertyValues(inner)!
         const results = new Map<number, number>()
-        const count = reply[WRITE_REPLY_PROP_OFFSET - 1] ?? 0
-        for (let i = 0; i < count; i++)
-            results.set(reply[WRITE_REPLY_PROP_OFFSET + 2 * i], reply[WRITE_REPLY_RESULT_OFFSET + 2 * i])
+        for (let i = 0; i < reply[6]; i++) results.set(reply[7 + i * 2], reply[8 + i * 2])
+        const at = 7 + reply[6] * 2
+        const rec = reply.length === at + RECORD_LEN ? reply.subarray(at) : undefined
+        const actual = rec ? this.recordValues(rec) : undefined
         const accepted = (prop: number) => WRITE_OK.has(results.get(prop) ?? WRITE_REFUSED)
-
-        const recordAt = WRITE_REPLY_PROP_OFFSET + 2 * count
-        if ((accepted(PROP_COURSE) || accepted(PROP_CYCLE_OPTIMIZATION)) && reply.length >= recordAt + RECORD_LEN)
-            this.takeInCourse(reply.subarray(recordAt, recordAt + RECORD_LEN))
-
-        const values: [BundleKey, number][] = []
-        let at = SET_PROPERTY.length + 1
-        for (let i = 0; i < inner[SET_PROPERTY.length]; i++) {
-            const entry = BUNDLE.find(({ prop }) => prop === inner[at])
-            const width = entry?.width ?? 1
-            if (inner.length < at + 1 + width) return
-            if (entry && accepted(entry.prop))
-                values.push([entry.key, width === 2 ? inner.readUInt16BE(at + 1) : inner[at + 1]])
-            at += 1 + width
+        if (accepted(PROP_POWER)) {
+            this.boundary()
+            this.course = undefined
+            return
         }
-        for (const [key, value] of values) this.bundle.set(key, value)
+        if (accepted(PROP_COURSE) || accepted(PROP_CYCLE_OPTIMIZATION)) {
+            const previous = this.course ? this.courseIdentity(this.course.code, this.course.downloaded) : undefined
+            this.boundary()
+            if (
+                rec &&
+                (!accepted(PROP_COURSE) ||
+                    (actual?.get(PROP_COURSE) === values.get(PROP_COURSE) &&
+                        (values.get(PROP_COURSE) !== COURSE_DOWNLOADED ||
+                            actual?.get(PROP_DOWNLOADED_COURSE) === values.get(PROP_DOWNLOADED_COURSE))))
+            ) {
+                this.takeInCourse(rec, false)
+                if (
+                    previous !== undefined &&
+                    previous !== this.courseIdentity(rec[COURSE_OFFSET], rec[DOWNLOADED_COURSE_OFFSET])
+                )
+                    this.previousCourse = {
+                        identity: previous,
+                        current: this.courseIdentity(rec[COURSE_OFFSET], rec[DOWNLOADED_COURSE_OFFSET]),
+                        expires: Date.now() + CONFIRMATION_WINDOW_MS,
+                    }
+                const defaults = this.recordValues(rec)
+                for (const { prop, key } of BUNDLE) this.bundle.set(key, defaults.get(prop)!)
+                if (!this.pending.has(PROP_COURSE))
+                    this.publishProperty(
+                        'course',
+                        rec[COURSE_OFFSET] === COURSE_DOWNLOADED
+                            ? DOWNLOADED_COURSE.map(rec[DOWNLOADED_COURSE_OFFSET])
+                            : COURSE.map(rec[COURSE_OFFSET]),
+                    )
+            } else this.course = undefined
+        }
+        for (const [prop, value] of values) {
+            if (!accepted(prop)) continue
+            const confirmed = actual?.get(prop) === value && before.get(prop) !== value
+            this.accepted.set(prop, { value, expires: Date.now() + CONFIRMATION_WINDOW_MS, confirmed })
+            if (confirmed && !this.pending.has(prop) && rec) this.publishConfirmed(prop, rec)
+        }
+    }
+
+    private publishConfirmed(prop: number, rec: Buffer) {
+        const raw = this.recordValues(rec).get(prop)!
+        const entry = BUNDLE.find((entry) => entry.prop === prop)
+        if (entry) {
+            this.publishProperty(
+                entry.key,
+                entry.key === 'temp'
+                    ? TEMP.map(raw)
+                    : entry.key === 'dry_level'
+                      ? DRY_LEVEL.map(raw)
+                      : entry.key === 'dry_time'
+                        ? raw
+                        : onOff(raw !== 0),
+            )
+        } else if (prop === PROP_BUZZER) this.publishProperty('buzzer', BUZZER.map(raw))
+        else if (prop === PROP_SPLASH_SCREEN) this.publishProperty('splash_screen', SPLASH_SCREEN.map(raw))
+        else if (prop === PROP_KEEP_FRESH) this.publishProperty('keep_fresh', onOff(raw !== 0))
+        else if (prop === PROP_CYCLE_OPTIMIZATION) this.publishProperty('cycle_optimization', onOff(raw !== 0))
     }
 
     // After a remote power change the dryer may send no record, only these events.
     private processEvent(payload: Buffer) {
         const on = payload[EVENT_POWER_OFFSET] !== 0
-        if (!on && this.course) this.course = { ...this.course, on: false }
+        if (!on) this.completionState = 'unarmed'
+        if (!on && this.course?.on) {
+            this.boundary()
+            this.course = { ...this.course, on: false }
+        }
         this.publishProperty('power', onOff(on))
-        if (payload[EVENT_ID_OFFSET] === EVENT_ID_DOOR)
+        if (
+            payload.subarray(0, 5).equals(Buffer.from([EVENT_ID_DOOR, 0x0a, 0x02, 0x04, EVENT_ID_DOOR])) &&
+            [0, DOOR_OPEN].includes(payload[EVENT_DOOR_OFFSET])
+        )
             this.publishProperty('door', onOff(payload[EVENT_DOOR_OFFSET] === DOOR_OPEN))
     }
 
     // The course, and the settings that come with it
-    private takeInCourse(rec: Buffer) {
+    private takeInCourse(rec: Buffer, publish = true) {
         const code = rec[COURSE_OFFSET]
         const isOff = rec[STATE_OFFSET] === STATE_POWEROFF
         const timedDry = code === COURSE_TIMED_DRY
-        this.course = { code, on: !isOff }
+        if (
+            this.course &&
+            (this.courseIdentity(this.course.code, this.course.downloaded) !==
+                this.courseIdentity(code, rec[DOWNLOADED_COURSE_OFFSET]) ||
+                (this.course.on && isOff))
+        )
+            this.boundary()
+        this.course = { code, downloaded: rec[DOWNLOADED_COURSE_OFFSET], on: !isOff }
         if (this.problem === NO_COURSE_REASON && code !== NO_COURSE) this.setProblem(undefined)
         this.bundle.set('temp', rec[TEMP_OFFSET])
         this.bundle.set('dry_level', rec[DRY_LEVEL_OFFSET])
         this.bundle.set('dry_time', timedDry ? rec.readUInt16BE(INITIAL_TIME_OFFSET) : 0)
+        if (!publish) return
         this.publishProperty(
             'course',
             code === COURSE_DOWNLOADED ? DOWNLOADED_COURSE.map(rec[DOWNLOADED_COURSE_OFFSET]) : COURSE.map(code),
         )
-        this.publishProperty('dry_level', DRY_LEVEL.map(rec[DRY_LEVEL_OFFSET]))
-        this.publishProperty('temp', TEMP.map(rec[TEMP_OFFSET]))
-        this.publishProperty('dry_time', timedDry && !isOff ? rec.readUInt16BE(INITIAL_TIME_OFFSET) : undefined)
+        this.publishSetting(0x1e, 'dry_level', rec[DRY_LEVEL_OFFSET], DRY_LEVEL.map(rec[DRY_LEVEL_OFFSET]))
+        this.publishSetting(0x20, 'temp', rec[TEMP_OFFSET], TEMP.map(rec[TEMP_OFFSET]))
+        this.publishSetting(
+            0x70,
+            'dry_time',
+            timedDry ? rec.readUInt16BE(INITIAL_TIME_OFFSET) : 0,
+            timedDry && !isOff ? rec.readUInt16BE(INITIAL_TIME_OFFSET) : undefined,
+        )
     }
 
     private processStatus(buf: Buffer, recordOffset: number, expectedLen: number) {
         if (buf.length !== expectedLen) return
         const rec = buf.subarray(recordOffset, recordOffset + RECORD_LEN)
+        if (
+            this.previousCourse &&
+            rec[STATE_OFFSET] !== STATE_POWEROFF &&
+            this.courseIdentity(rec[COURSE_OFFSET], rec[DOWNLOADED_COURSE_OFFSET]) === this.previousCourse.identity &&
+            Date.now() < this.previousCourse.expires
+        )
+            return
+        if (this.previousCourse && Date.now() >= this.previousCourse.expires) {
+            if (this.courseIdentity(rec[COURSE_OFFSET], rec[DOWNLOADED_COURSE_OFFSET]) !== this.previousCourse.current)
+                this.setProblem('Accepted course not reflected before confirmation expired')
+            this.previousCourse = undefined
+        }
+        for (const [prop, raw] of this.recordValues(rec)) this.baseline(prop, raw)
 
+        for (const [prop, raw] of this.recordValues(rec)) this.reported.set(prop, raw)
         const state = rec[STATE_OFFSET]
         const isOff = state === STATE_POWEROFF
+        if ([0, 1].includes(state)) this.completionState = 'unarmed'
+        else if (this.completionState === 'unarmed' && [7, 8].includes(state)) this.completionState = 'armed'
         this.takeInCourse(rec)
         this.bundle.set('steam', bit(rec[OPT2_OFFSET], OPT2_STEAM))
         this.bundle.set('damp_dry_signal', bit(rec[OPT1_OFFSET], OPT1_DAMP_DRY_SIGNAL))
@@ -768,21 +1075,64 @@ export default class Device extends AABBDevice {
 
         this.publishProperty('power', onOff(!isOff))
         this.publishProperty('status', STATE.map(state))
-        this.publishProperty('buzzer', BUZZER.map(rec[BUZZER_OFFSET]))
-        this.publishProperty('remaining_time', isOff ? 0 : rec.readUInt16BE(REMAIN_TIME_OFFSET))
+        this.publishSetting(PROP_BUZZER, 'buzzer', rec[BUZZER_OFFSET], BUZZER.map(rec[BUZZER_OFFSET]))
+        this.publishProperty(
+            'remaining_time',
+            [0, 1].includes(state) ? undefined : rec.readUInt16BE(REMAIN_TIME_OFFSET),
+        )
         this.publishProperty('initial_time', isOff ? 0 : rec.readUInt16BE(INITIAL_TIME_OFFSET))
         this.publishProperty('energy', rec.readUInt16BE(SPENT_POWER_OFFSET))
         this.publishProperty('drum_light', onOff((rec[OPT1_OFFSET] & OPT1_DRUM_LIGHT) !== 0))
-        this.publishProperty('low_static', onOff((rec[OPT1_OFFSET] & OPT1_LOW_STATIC) !== 0))
-        this.publishProperty('wrinkle_care', onOff((rec[OPT1_OFFSET] & OPT1_WRINKLE_CARE) !== 0))
-        this.publishProperty('damp_dry_signal', onOff((rec[OPT1_OFFSET] & OPT1_DAMP_DRY_SIGNAL) !== 0))
-        this.publishProperty('steam', onOff((rec[OPT2_OFFSET] & OPT2_STEAM) !== 0))
-        this.publishProperty('energy_saver', onOff((rec[OPT2_OFFSET] & OPT2_ENERGY_SAVER) !== 0))
+        this.publishSetting(
+            54,
+            'low_static',
+            bit(rec[OPT1_OFFSET], OPT1_LOW_STATIC),
+            onOff((rec[OPT1_OFFSET] & OPT1_LOW_STATIC) !== 0),
+        )
+        this.publishSetting(
+            15,
+            'wrinkle_care',
+            bit(rec[OPT1_OFFSET], OPT1_WRINKLE_CARE),
+            onOff((rec[OPT1_OFFSET] & OPT1_WRINKLE_CARE) !== 0),
+        )
+        this.publishSetting(
+            52,
+            'damp_dry_signal',
+            bit(rec[OPT1_OFFSET], OPT1_DAMP_DRY_SIGNAL),
+            onOff((rec[OPT1_OFFSET] & OPT1_DAMP_DRY_SIGNAL) !== 0),
+        )
+        this.publishSetting(
+            63,
+            'steam',
+            bit(rec[OPT2_OFFSET], OPT2_STEAM),
+            onOff((rec[OPT2_OFFSET] & OPT2_STEAM) !== 0),
+        )
+        this.publishSetting(
+            56,
+            'energy_saver',
+            bit(rec[OPT2_OFFSET], OPT2_ENERGY_SAVER),
+            onOff((rec[OPT2_OFFSET] & OPT2_ENERGY_SAVER) !== 0),
+        )
         this.publishProperty('control_lock', onOff((rec[OPT3_OFFSET] & OPT3_CONTROL_LOCK) !== 0))
         this.publishProperty('remote_start', onOff((rec[OPT3_OFFSET] & OPT3_REMOTE_START) !== 0))
-        this.publishProperty('cycle_optimization', onOff((rec[OPT4_OFFSET] & OPT4_CYCLE_OPTIMIZATION) !== 0))
+        this.publishSetting(
+            76,
+            'cycle_optimization',
+            bit(rec[OPT4_OFFSET], OPT4_CYCLE_OPTIMIZATION),
+            onOff((rec[OPT4_OFFSET] & OPT4_CYCLE_OPTIMIZATION) !== 0),
+        )
         this.publishProperty('remote_maintain', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_MAINTAIN) !== 0))
-        this.publishProperty('keep_fresh', onOff((rec[OPT5_OFFSET] & OPT5_KEEP_FRESH) !== 0))
-        this.publishProperty('splash_screen', SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]))
+        this.publishSetting(
+            87,
+            'keep_fresh',
+            bit(rec[OPT5_OFFSET], OPT5_KEEP_FRESH),
+            onOff((rec[OPT5_OFFSET] & OPT5_KEEP_FRESH) !== 0),
+        )
+        this.publishSetting(
+            PROP_SPLASH_SCREEN,
+            'splash_screen',
+            rec[SPLASH_SCREEN_OFFSET],
+            SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]),
+        )
     }
 }
