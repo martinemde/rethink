@@ -608,6 +608,7 @@ export default class Device extends AABBDevice {
     private readonly pending = new Map<number, { value: number; owner: object }>()
 
     protected writeTimedOut(_writes: readonly AwaitedWrite[]) {
+        this.acceptedPower = undefined
         this.accepted.clear()
         this.pending.clear()
         this.pendingBundle = undefined
@@ -616,7 +617,10 @@ export default class Device extends AABBDevice {
         this.setProblem('Command timed out: reconnect required')
     }
 
+    private acceptedPower?: { value: boolean; expires: number }
+
     private boundary() {
+        this.acceptedPower = undefined
         this.generation++
         this.previousCourse = undefined
         this.accepted.clear()
@@ -624,6 +628,7 @@ export default class Device extends AABBDevice {
     }
 
     drop() {
+        this.acceptedPower = undefined
         this.accepted.clear()
         this.pending.clear()
         this.pendingBundle = undefined
@@ -935,6 +940,12 @@ export default class Device extends AABBDevice {
         if (accepted(PROP_POWER)) {
             this.boundary()
             this.course = undefined
+            // Power replies can carry a stale record. Only publish when record and exact request agree.
+            const value = values.get(PROP_POWER)
+            if (value !== undefined && [0, 1].includes(value) && actual?.get(PROP_POWER) === value) {
+                this.acceptedPower = { value: value === 1, expires: Date.now() + CONFIRMATION_WINDOW_MS }
+                if (!this.pending.has(PROP_POWER)) this.publishProperty('power', onOff(value === 1))
+            }
             return
         }
         if (accepted(PROP_COURSE) || accepted(PROP_CYCLE_OPTIMIZATION)) {
@@ -996,6 +1007,21 @@ export default class Device extends AABBDevice {
         else if (prop === PROP_CYCLE_OPTIMIZATION) this.publishProperty('cycle_optimization', onOff(raw !== 0))
     }
 
+    private publishPower(observed: boolean) {
+        const accepted = this.acceptedPower
+        if (accepted) {
+            if (observed === accepted.value || Date.now() >= accepted.expires) {
+                if (observed !== accepted.value)
+                    this.setProblem('Accepted power not reflected before confirmation expired')
+                this.acceptedPower = undefined
+            } else {
+                if (!this.pending.has(PROP_POWER)) this.publishProperty('power', onOff(accepted.value))
+                return
+            }
+        }
+        if (!this.pending.has(PROP_POWER)) this.publishProperty('power', onOff(observed))
+    }
+
     // After a remote power change the dryer may send no record, only these events.
     private processEvent(payload: Buffer) {
         const on = payload[EVENT_POWER_OFFSET] !== 0
@@ -1004,7 +1030,7 @@ export default class Device extends AABBDevice {
             this.boundary()
             this.course = { ...this.course, on: false }
         }
-        this.publishProperty('power', onOff(on))
+        this.publishPower(on)
         if (
             payload.subarray(0, 5).equals(Buffer.from([EVENT_ID_DOOR, 0x0a, 0x02, 0x04, EVENT_ID_DOOR])) &&
             [0, DOOR_OPEN].includes(payload[EVENT_DOOR_OFFSET])
@@ -1073,7 +1099,7 @@ export default class Device extends AABBDevice {
         this.bundle.set('low_static', bit(rec[OPT1_OFFSET], OPT1_LOW_STATIC))
         this.bundle.set('wrinkle_care', bit(rec[OPT1_OFFSET], OPT1_WRINKLE_CARE))
 
-        this.publishProperty('power', onOff(!isOff))
+        this.publishPower(!isOff)
         this.publishProperty('status', STATE.map(state))
         this.publishSetting(PROP_BUZZER, 'buzzer', rec[BUZZER_OFFSET], BUZZER.map(rec[BUZZER_OFFSET]))
         this.publishProperty(

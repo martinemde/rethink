@@ -398,6 +398,8 @@ function propertyIds(inner: Buffer): number[] | undefined {
 
 export default class Device extends AABBDevice {
     protected override readonly strictWriteTracking = true
+    private acceptedPower?: { value: boolean; until: number }
+    private acceptedRemoteMaintain?: { value: boolean; until: number }
     private generation = 0
     private lastRecord?: Buffer
     private readonly sentGenerations: { inner: string; generation: number }[] = []
@@ -429,6 +431,8 @@ export default class Device extends AABBDevice {
         return i < 0 ? undefined : this.sentGenerations.splice(i, 1)[0].generation
     }
     protected override writeTimedOut() {
+        this.acceptedPower = undefined
+        this.acceptedRemoteMaintain = undefined
         this.bundle.clear()
         this.pending.clear()
         this.pendingOwners.clear()
@@ -440,6 +444,8 @@ export default class Device extends AABBDevice {
         this.setProblem('Command timed out; reconnect before sending more commands')
     }
     override drop() {
+        this.acceptedPower = undefined
+        this.acceptedRemoteMaintain = undefined
         this.thinq.off('sendData', this.trackGeneration)
         this.pending.clear()
         this.pendingOwners.clear()
@@ -932,7 +938,16 @@ export default class Device extends AABBDevice {
         this.bundleGroup = undefined
         this.bundleGroupId++
         const inner = Buffer.from([...COMMAND, command, 0x01, value])
-        this.queueWrite(() => (this.context(false) ? inner : undefined))
+        const owner = {}
+        this.pending.set('remote_maintain', value)
+        this.pendingOwners.set('remote_maintain', owner)
+        this.queueWrite(() => {
+            if (this.pendingOwners.get('remote_maintain') === owner) {
+                this.pending.delete('remote_maintain')
+                this.pendingOwners.delete('remote_maintain')
+            }
+            return this.context(false) ? inner : undefined
+        })
     }
 
     protected writeType(inner: Buffer) {
@@ -944,8 +959,21 @@ export default class Device extends AABBDevice {
         if (buf.length !== 4 || buf[2] !== COMMAND[1]) return
         const write = this.writeAnswered(COMMAND[1])
         if (!write) return
-        this.writeGeneration(write)
+        const generation = this.writeGeneration(write)
+        if (generation !== this.generation) return
         if (write.own) this.setProblem(buf[3] === COMMAND_OK ? undefined : `Command refused (0x${hex2(buf[3])})`)
+        // This ACK has no record: acceptance of the exact request is not an observed setting.
+        if (
+            buf[3] === COMMAND_OK &&
+            write.inner.length === 5 &&
+            write.inner[2] === COMMAND_REMOTE_MAINTAIN &&
+            write.inner[3] === 1 &&
+            [0, 1].includes(write.inner[4])
+        ) {
+            this.acceptedRemoteMaintain = { value: write.inner[4] === 1, until: Date.now() + CONFIRMED_STATE_MS }
+            if (!this.pending.has('remote_maintain'))
+                this.publishProperty('remote_maintain', onOff(this.acceptedRemoteMaintain.value))
+        }
     }
 
     private writeBundle(key: BundleKey, value: number) {
@@ -1103,6 +1131,8 @@ export default class Device extends AABBDevice {
             }
             if (accepted(PROP_COURSE) || accepted(PROP_POWER)) {
                 this.generation++
+                this.acceptedPower = undefined
+                this.acceptedRemoteMaintain = undefined
                 this.confirmed.clear()
                 this.bundle.clear()
                 // Accepted course defaults are private command context, never a state echo.
@@ -1139,7 +1169,8 @@ export default class Device extends AABBDevice {
                     this.course = { code: record[5], loaded: record[20], on: record[21] !== 0 }
                     this.loadBundle(record)
                 } else {
-                    if (!this.pending.has('power')) this.publishProperty('power', onOff(record[21] !== 0))
+                    this.acceptedPower = { value: record[21] !== 0, until: Date.now() + CONFIRMED_STATE_MS }
+                    if (!this.pending.has('power')) this.publishProperty('power', onOff(this.acceptedPower.value))
                     this.lastRecord = undefined
                     this.confirmedCourse = undefined
                 }
@@ -1204,6 +1235,18 @@ export default class Device extends AABBDevice {
         }
     }
 
+    private reconcileFeedback(key: 'acceptedPower' | 'acceptedRemoteMaintain', observed: boolean) {
+        const accepted = this[key]
+        if (!accepted) return observed
+        if (observed === accepted.value || Date.now() >= accepted.until) {
+            if (observed !== accepted.value)
+                this.setProblem('Accepted feedback expired before a matching status report')
+            this[key] = undefined
+            return observed
+        }
+        return accepted.value
+    }
+
     private loadBundle(rec: Buffer) {
         for (const field of RECORD_PROPERTIES)
             if (BUNDLE.some((entry) => entry.key === field.key))
@@ -1247,6 +1290,8 @@ export default class Device extends AABBDevice {
         }
         if (previous && (previous[5] !== rec[5] || previous[20] !== rec[20] || (rec[21] === 0 && previous[21] !== 0))) {
             this.generation++
+            if (previous[5] !== rec[5] || previous[20] !== rec[20]) this.acceptedPower = undefined
+            this.acceptedRemoteMaintain = undefined
             this.confirmed.clear()
         }
         this.lastRecord = Buffer.from(rec)
@@ -1280,7 +1325,7 @@ export default class Device extends AABBDevice {
         this.bundle.set('reserve_time', rec.readUInt16BE(RESERVE_TIME_OFFSET))
 
         this.publishingRecord = true
-        this.publishProperty('power', isOff ? 'OFF' : 'ON')
+        this.publishProperty('power', onOff(this.reconcileFeedback('acceptedPower', !isOff)))
         this.publishProperty('status', STATE.map(state))
         this.publishProperty('course', COURSE.map(course === COURSE_DOWNLOADED ? rec[LOADED_COURSE_OFFSET] : course))
         this.publishProperty('soil', SOIL.map(rec[SOIL_OFFSET]))
@@ -1316,7 +1361,10 @@ export default class Device extends AABBDevice {
         this.publishProperty('fresh_care', (rec[OPT3_OFFSET] & OPT3_FRESH_CARE) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('child_lock', (rec[OPT4_OFFSET] & OPT4_CONTROL_LOCK) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('cycle_optimization', (rec[OPT6_OFFSET] & OPT6_CYCLE_OPTIMIZATION) !== 0 ? 'ON' : 'OFF')
-        this.publishProperty('remote_maintain', (rec[OPT6_OFFSET] & OPT6_REMOTE_MAINTAIN) !== 0 ? 'ON' : 'OFF')
+        this.publishProperty(
+            'remote_maintain',
+            onOff(this.reconcileFeedback('acceptedRemoteMaintain', (rec[OPT6_OFFSET] & OPT6_REMOTE_MAINTAIN) !== 0)),
+        )
         this.publishProperty('door_lock', (rec[DOOR_LOCK_OFFSET] & DOOR_LOCK_MASK) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('remote_start', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_START) !== 0))
         this.publishProperty('drawer', (rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) !== 0 ? 'OFF' : 'ON')

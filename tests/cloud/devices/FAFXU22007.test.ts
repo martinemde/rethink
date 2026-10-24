@@ -2038,6 +2038,51 @@ describe('FAFXU22007 reconciled controls', () => {
         assert.equal(ha.devices[DEVICE_ID].properties.course, 'Heavy Duty')
     })
 
+    test('accepted power and command ACK feedback are bounded and separate from observations', (ctx) => {
+        const now = Date.now()
+        const clock = ctx.mock.method(Date, 'now', () => now)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        const observed = ha.devices[DEVICE_ID].properties.remote_maintain
+        const requested = observed === 'ON' ? 'OFF' : 'ON'
+        dev.setProperty('remote_maintain', requested)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, observed)
+        thinq.emit('data', shortFrame([0x20, 0, 0x25, 0]))
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, observed)
+        thinq.emit('data', shortFrame([0x20, 0, 0x24, 0]))
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, requested)
+        thinq.emit('data', EB_IDLE)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, requested)
+        clock.mock.mockImplementation(() => now + 30_001)
+        thinq.emit('data', EB_IDLE)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, observed)
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
+        dev.setProperty('power', 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
+        const off = currentRecord()
+        off[21] = 0
+        thinq.emit('data', reply([2], off))
+        assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
+        thinq.emit('data', EB_IDLE)
+        assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
+        clock.mock.mockImplementation(() => now + 60_002)
+        thinq.emit('data', EB_IDLE)
+        assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
+    })
+
+    test('remote maintain refused or old-generation ACK never echoes', () => {
+        for (const boundary of [false, true]) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', EB_IDLE)
+            dev.setProperty('remote_maintain', 'ON')
+            if (boundary) thinq.emit('data', POWER_OFF)
+            const before = ha.devices[DEVICE_ID].properties.remote_maintain
+            thinq.emit('data', shortFrame([0x20, 0, 0x24, boundary ? 0 : 3]))
+            assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, before)
+        }
+    })
+
     test('accepted actual reply values expire after 30 seconds, not requested guesses', (ctx) => {
         const now = Date.now()
         const clock = ctx.mock.method(Date, 'now', () => now)

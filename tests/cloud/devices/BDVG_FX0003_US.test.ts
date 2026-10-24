@@ -1570,6 +1570,43 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
         assert.equal(ha.devices[DEVICE_ID].properties.course, 'Normal')
     })
 
+    test('power feedback requires matching accepted request and record, then expires', (ctx) => {
+        const now = Date.now()
+        const clock = ctx.mock.method(Date, 'now', () => now)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_CONNECT)
+        dev.setProperty('power', 'OFF')
+        const off = Buffer.from(EB_CONNECT.subarray(15, 57))
+        off[13] = 0
+        thinq.emit('data', writeReply(thinq.outbox[0], off))
+        assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
+        thinq.emit('data', EB_CONNECT)
+        assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
+        clock.mock.mockImplementation(() => now + 30_001)
+        thinq.emit('data', EB_CONNECT)
+        assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
+    })
+
+    test('power reply without record, stale record or refusal never echoes', () => {
+        for (const variant of ['absent', 'stale', 'refused']) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', EB_CONNECT)
+            dev.setProperty('power', 'OFF')
+            const rec = Buffer.from(EB_CONNECT.subarray(15, 57))
+            if (variant === 'refused') rec[13] = 0
+            thinq.emit(
+                'data',
+                writeReply(
+                    thinq.outbox[0],
+                    variant === 'absent' ? undefined : rec,
+                    new Map(variant === 'refused' ? [[2, 3]] : []),
+                ),
+            )
+            assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
+        }
+    })
+
     test('only power may write without passive On context, with no query or retry', () => {
         const { thinq, dev } = makeDevice()
         for (const [key, value] of [
