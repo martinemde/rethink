@@ -3,8 +3,9 @@ import { Device as Thinq2Device } from '../thinq2/device'
 import { type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
-import AABBDevice from './aabb_device'
+import AABBDevice, { type AwaitedWrite } from './aabb_device'
 import { Enum } from '@/util/enum'
+import crc16 from '@/util/crc16'
 
 // LG WM6700HBA front-load washer. FAFXU25006's framing, but a 51-byte record and different
 // temperature codes.
@@ -48,8 +49,9 @@ const EVENT_FRAME_TYPE = 0x03
 const DOOR_EVENT_INNER_LEN = 6
 const DOOR_EVENT_BUF_LEN = 13 + DOOR_EVENT_INNER_LEN + 1
 
-const DOOR_EVENT_ID = 0x10
-const DOOR_EVENT_ID_OFFSETS = [13, 17]
+const DOOR_EVENT_PREFIX = Buffer.from([0x10, 0x0b, 0x01, 0x0b, 0x10])
+const COMPLETION_PREFIX = Buffer.from([0x08, 0x0b, 0x01, 0x0b, 0x08, 0x02])
+const COMPLETION_INNER_LEN = 121
 const DOOR_EVENT_VALUE_OFFSET = 18
 
 const DOOR_OPEN = 1
@@ -62,8 +64,6 @@ const DOOR_SHUT = 2
 const DRAWER_FRAME_TYPE = 0xd8
 const DRAWER_BUF_LEN = 3
 const DRAWER_OPEN = 0
-
-const STATUS_REQUEST = 'F0ED112101000000180411120000'
 
 // Set property:
 //
@@ -121,9 +121,6 @@ const RESERVE_TIME_STEP = 30
 // A busy reply's status is taken when the write arrives, and can predate a write accepted just before it;
 // the washer then re-sends that reply, unchanged, for some 15 s.
 const WRITE_REPLY_TYPE = 0xe6
-const WRITE_REPLY_COUNT_OFFSET = 6
-const WRITE_REFUSED = 0x03
-const WRITE_BUSY = 0x13
 const WRITE_OK = new Set([0x00, 0x10, 0x11])
 
 // Command, and its reply (only result 0x00 seen):
@@ -178,9 +175,12 @@ const OPT3_FRESH_CARE = 0x40
 
 const OPT4_OFFSET = 37
 const OPT4_CONTROL_LOCK = 0x20
+const OPT4_REMOTE_START = 0x10
+const DOOR_LOCK_MASK = 0x01
 
 const OPT5_OFFSET = 39
 const OPT5_DELAY_START = 0x80
+const OPT5_DRAWER_CLOSED = 0x04
 
 const OPT6_OFFSET = 40
 // Set and cleared with f0 24 10 01 <1|0>, which the cloud sends in answer to the washer's 7f 03 after a
@@ -192,25 +192,26 @@ const OPT6_CYCLE_OPTIMIZATION = 0x08
 const OPT7_OFFSET = 50
 const OPT7_QUICK_LOAD_SENSE = 0x04
 
+const CONFIRMED_STATE_MS = 30_000
 const STATE_POWEROFF = 0
 
 // modelJSON state indices
 const STATE = Enum.of({
     Off: 0,
-    Initial: 1,
-    Pause: 2,
+    Standby: 1,
+    Paused: 2,
     Detecting: 3,
     Filling: 5,
     'Detecting load': 6,
     Reserved: 7,
     Soak: 8,
     'Pre-wash': 9,
-    Running: 11,
+    Washing: 11,
     Rinsing: 12,
     'Rinse hold': 13,
     Spinning: 14,
     Drying: 15,
-    End: 16,
+    Finished: 16,
     Refreshing: 21,
     'Error auto off': 23,
     'Frozen prevent initial': 27,
@@ -223,7 +224,7 @@ const STATE = Enum.of({
     'Detergent input': 38,
     'Softener input': 39,
     'Pollution detecting': 40,
-    'Tub cleaning': 41,
+    'Tub Cleaning': 41,
     'End remote maintain on': 42,
     Steam: 43,
     'Laundry care': 47,
@@ -268,9 +269,9 @@ const DOWNLOADED_COURSE_ID: Partial<Record<string, number>> = {
 // 0 on courses without the setting, here and for temp and spin
 const SOIL = Enum.of({
     Light: 1,
-    'Medium Light': 2,
+    'Med. Light': 2,
     Medium: 3,
-    'Medium Heavy': 4,
+    'Med. Heavy': 4,
     Heavy: 5,
 })
 
@@ -279,7 +280,7 @@ const TEMP = Enum.of({
     Cold: 14,
     Warm: 16,
     Hot: 18,
-    'Extra Hot': 19,
+    'Ex. Hot': 19,
 })
 
 const RINSE = Enum.of({
@@ -290,10 +291,11 @@ const RINSE = Enum.of({
 })
 
 const SPIN = Enum.of({
+    'No Spin': 12,
     Low: 13,
     Medium: 14,
     High: 15,
-    'Extra High': 16,
+    'Ex. High': 16,
 })
 
 const BUZZER = Enum.of({
@@ -345,20 +347,151 @@ const onOff = (v: boolean) => (v ? 'ON' : 'OFF')
 const hex2 = (v: number) => v.toString(16).padStart(2, '0')
 const bit = (byte: number, mask: number) => ((byte & mask) !== 0 ? 1 : 0)
 
+const RECORD_PROPERTIES = [
+    { prop: 0x1f, key: 'temp', offset: 2 },
+    { prop: 0x21, key: 'spin', offset: 4 },
+    { prop: 0x1e, key: 'soil', offset: 1 },
+    { prop: 0x20, key: 'rinse', offset: 3 },
+    { prop: 0x3e, key: 'steam', offset: 35, mask: 0x10 },
+    { prop: 0x34, key: 'pre_wash', offset: 34, mask: 0x40 },
+    { prop: 0x38, key: 'cold_wash', offset: 34, mask: 0x04 },
+    { prop: 0x35, key: 'turbo_wash', offset: 34, mask: 0x20 },
+    { prop: 0x44, key: 'fresh_care', offset: 36, mask: 0x40 },
+    { prop: 0x7f, key: 'reserve_time', offset: 11, width: 2 },
+    { prop: 0x13, key: 'buzzer', offset: 29 },
+    { prop: 0x4c, key: 'cycle_optimization', offset: 40, mask: 0x08 },
+    { prop: 0x56, key: 'quick_load_sense', offset: 50, mask: 0x04 },
+    { prop: 0x51, key: 'splash_screen', offset: 46 },
+] as const
+
+function recordValue(rec: Buffer, field: (typeof RECORD_PROPERTIES)[number]): number {
+    if ('mask' in field) return bit(rec[field.offset], field.mask)
+    return 'width' in field ? rec.readUInt16BE(field.offset) : rec[field.offset]
+}
+function applyRecordValue(rec: Buffer, field: (typeof RECORD_PROPERTIES)[number], value: number) {
+    if ('mask' in field) rec[field.offset] = (rec[field.offset] & ~field.mask) | (value ? field.mask : 0)
+    else if ('width' in field) rec.writeUInt16BE(value, field.offset)
+    else rec[field.offset] = value
+}
+function propertyIds(inner: Buffer): number[] | undefined {
+    if (
+        inner.length < 7 ||
+        inner[0] !== 0xf0 ||
+        inner[1] !== 0xe5 ||
+        inner[2] !== 0 ||
+        inner[3] !== 2 ||
+        inner[4] !== 1 ||
+        ![0xff, 0x33].includes(inner[5])
+    )
+        return
+    const ids: number[] = []
+    let offset = 7
+    for (let i = 0; i < inner[6]; i++) {
+        if (offset >= inner.length) return
+        const id = inner[offset]
+        ids.push(id)
+        offset += id === 0x7f ? 3 : 2
+    }
+    if (offset !== inner.length || new Set(ids).size !== ids.length) return
+    return ids
+}
+
 export default class Device extends AABBDevice {
+    protected override readonly strictWriteTracking = true
+    private generation = 0
+    private lastRecord?: Buffer
+    private readonly sentGenerations: { inner: string; generation: number }[] = []
+    private readonly confirmed = new Map<number, { value: number; until: number }>()
+    private readonly pending = new Map<string, number>()
+    private readonly pendingOwners = new Map<string, object>()
+    private publishingRecord = false
+    private bundleGroup?: Map<BundleKey, number>
+    private bundleGroupId = 0
+    private confirmedCourse?: {
+        code: number
+        loaded: number
+        previousCode?: number
+        previousLoaded?: number
+        until: number
+    }
+    private readonly trackGeneration = (type: string, frame: Buffer) => {
+        if (
+            type === 'packet' &&
+            !this.writesBlocked &&
+            frame[0] === 0xaa &&
+            frame[frame.length - 1] === 0xbb &&
+            this.writeType(frame.subarray(2, -2)) !== undefined
+        )
+            this.sentGenerations.push({ inner: frame.subarray(2, -2).toString('hex'), generation: this.generation })
+    }
+    private writeGeneration(write: AwaitedWrite): number | undefined {
+        const i = this.sentGenerations.findIndex((entry) => entry.inner === write.inner.toString('hex'))
+        return i < 0 ? undefined : this.sentGenerations.splice(i, 1)[0].generation
+    }
+    protected override writeTimedOut() {
+        this.bundle.clear()
+        this.pending.clear()
+        this.pendingOwners.clear()
+        this.confirmed.clear()
+        this.confirmedCourse = undefined
+        this.sentGenerations.length = 0
+        this.lastRecord = undefined
+        this.bundleGroup = undefined
+        this.setProblem('Command timed out; reconnect before sending more commands')
+    }
+    override drop() {
+        this.thinq.off('sendData', this.trackGeneration)
+        this.pending.clear()
+        this.pendingOwners.clear()
+        this.confirmed.clear()
+        this.sentGenerations.length = 0
+        super.drop()
+    }
+    override publishProperty(prop: string, value: string | number | undefined) {
+        if (this.publishingRecord && this.pending.has(prop)) return
+        super.publishProperty(prop, value)
+    }
+    private context(requireCourse = true) {
+        if (this.writesBlocked) return false
+        const r = this.lastRecord
+        if (!r || !STATE.map(r[21]) || r[21] === 0 || (requireCourse && r[5] === 0)) {
+            this.setProblem(
+                requireCourse && r?.[5] === 0 ? NO_COURSE_REASON : 'Command needs a current known powered-on status',
+            )
+            return false
+        }
+        return true
+    }
+
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
-        super(HA, thinq, true)
+        super(HA, thinq, false)
+        thinq.on('sendData', this.trackGeneration)
         this.setConfig(
             allowExtendedType({
                 ...HADevice.config(meta, { name: 'LG Washer' }),
                 components: {
                     power: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-power',
                         state_topic: '$this/power',
                         command_topic: '$this/power/set',
                         name: 'Power',
-                        icon: 'mdi:washing-machine',
+                        icon: 'mdi:power',
+                    },
+                    cycle_finished: {
+                        platform: 'event',
+                        unique_id: '$deviceid-cycle_finished',
+                        state_topic: '$this/cycle_finished',
+                        name: 'Cycle finished',
+                        event_types: ['finished'],
+                    },
+                    remote_start: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-remote_start',
+                        state_topic: '$this/remote_start',
+                        name: 'Remote Start',
+                        icon: 'mdi:remote',
                     },
                     status: {
                         platform: 'sensor',
@@ -376,7 +509,7 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/course/set',
                         options: COURSE.options,
                         name: 'Course',
-                        icon: 'mdi:pin-outline',
+                        icon: 'mdi:washing-machine',
                     },
                     start: {
                         platform: 'button',
@@ -384,7 +517,7 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/start/set',
                         payload_press: '',
                         name: 'Start',
-                        icon: 'mdi:play-circle-outline',
+                        icon: 'mdi:play',
                     },
                     pause: {
                         platform: 'button',
@@ -392,7 +525,7 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/pause/set',
                         payload_press: '',
                         name: 'Pause',
-                        icon: 'mdi:pause-circle-outline',
+                        icon: 'mdi:pause',
                     },
                     resume: {
                         platform: 'button',
@@ -415,7 +548,7 @@ export default class Device extends AABBDevice {
                         platform: 'sensor',
                         unique_id: '$deviceid-initial_time',
                         state_topic: '$this/initial_time',
-                        name: 'Initial time',
+                        name: 'Total Time',
                         icon: 'mdi:timer-sand',
                         device_class: 'duration',
                         unit_of_measurement: 'min',
@@ -440,7 +573,7 @@ export default class Device extends AABBDevice {
                         step: RESERVE_TIME_STEP,
                         mode: 'box',
                         name: 'Delay Start time',
-                        icon: 'mdi:clock-outline',
+                        icon: 'mdi:clock-start',
                         device_class: 'duration',
                         unit_of_measurement: 'min',
                     },
@@ -483,6 +616,7 @@ export default class Device extends AABBDevice {
                         options: BUZZER.options,
                         name: 'Buzzer',
                         icon: 'mdi:volume-high',
+                        entity_category: 'config',
                     },
                     soil: {
                         platform: 'select',
@@ -491,7 +625,7 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/soil/set',
                         options: SOIL.options,
                         name: 'Soil level',
-                        icon: 'mdi:liquid-spot',
+                        icon: 'mdi:water',
                     },
                     spin: {
                         platform: 'select',
@@ -500,7 +634,7 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/spin/set',
                         options: SPIN.options,
                         name: 'Spin',
-                        icon: 'mdi:autorenew',
+                        icon: 'mdi:rotate-right',
                     },
                     temp: {
                         platform: 'select',
@@ -518,10 +652,11 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/rinse/set',
                         options: RINSE.options,
                         name: 'Extra Rinse',
-                        icon: 'mdi:water-sync',
+                        icon: 'mdi:water',
                     },
                     turbo_wash: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-turbo_wash',
                         state_topic: '$this/turbo_wash',
                         command_topic: '$this/turbo_wash/set',
@@ -530,35 +665,39 @@ export default class Device extends AABBDevice {
                     },
                     cold_wash: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-cold_wash',
                         state_topic: '$this/cold_wash',
                         command_topic: '$this/cold_wash/set',
                         name: 'Cold Wash',
-                        icon: 'mdi:snowflake',
+                        icon: 'mdi:water',
                     },
                     pre_wash: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-pre_wash',
                         state_topic: '$this/pre_wash',
                         command_topic: '$this/pre_wash/set',
                         name: 'Pre-wash',
-                        icon: 'mdi:water-sync',
+                        icon: 'mdi:water',
                     },
                     steam: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-steam',
                         state_topic: '$this/steam',
                         command_topic: '$this/steam/set',
                         name: 'Steam',
-                        icon: 'mdi:kettle-steam',
+                        icon: 'mdi:weather-windy',
                     },
                     fresh_care: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-fresh_care',
                         state_topic: '$this/fresh_care',
                         command_topic: '$this/fresh_care/set',
                         name: 'Fresh Care',
-                        icon: 'mdi:air-filter',
+                        icon: 'mdi:weather-windy',
                     },
                     child_lock: {
                         platform: 'binary_sensor',
@@ -591,20 +730,20 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-detergent_amount',
                         state_topic: '$this/detergent_amount',
                         name: 'Default detergent amount',
-                        icon: 'mdi:cup-water',
+                        icon: 'mdi:flask',
                         device_class: 'volume',
                         unit_of_measurement: 'mL',
-                        entity_category: 'diagnostic',
+                        entity_category: 'config',
                     },
                     softener_amount: {
                         platform: 'sensor',
                         unique_id: '$deviceid-softener_amount',
                         state_topic: '$this/softener_amount',
                         name: 'Default softener amount',
-                        icon: 'mdi:cup-water',
+                        icon: 'mdi:flower',
                         device_class: 'volume',
                         unit_of_measurement: 'mL',
-                        entity_category: 'diagnostic',
+                        entity_category: 'config',
                     },
                     softener_tank_use: {
                         platform: 'sensor',
@@ -628,15 +767,17 @@ export default class Device extends AABBDevice {
                     },
                     cycle_optimization: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-cycle_optimization',
                         state_topic: '$this/cycle_optimization',
                         command_topic: '$this/cycle_optimization/set',
                         name: 'Cycle Optimization',
-                        icon: 'mdi:sort',
+                        icon: 'mdi:auto-fix',
                         entity_category: 'config',
                     },
                     quick_load_sense: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-quick_load_sense',
                         state_topic: '$this/quick_load_sense',
                         command_topic: '$this/quick_load_sense/set',
@@ -651,7 +792,7 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/splash_screen/set',
                         options: SPLASH_SCREEN.options,
                         name: 'Splash screen',
-                        icon: 'mdi:monitor-shimmer',
+                        icon: 'mdi:monitor',
                         entity_category: 'config',
                     },
                     door_lock: {
@@ -659,16 +800,19 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-door_lock',
                         state_topic: '$this/door_lock',
                         name: 'Door lock',
-                        icon: 'mdi:lock', // not device_class 'lock', which is inverted
+                        device_class: 'lock',
+                        payload_on: 'OFF',
+                        payload_off: 'ON',
                         entity_category: 'diagnostic',
                     },
                     remote_maintain: {
                         platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-remote_maintain',
                         state_topic: '$this/remote_maintain',
                         command_topic: '$this/remote_maintain/set',
                         name: 'Remote maintain',
-                        icon: 'mdi:cellphone-wireless',
+                        icon: 'mdi:remote',
                         entity_category: 'config',
                     },
                     problem: {
@@ -693,14 +837,40 @@ export default class Device extends AABBDevice {
     }
 
     start() {
-        this.send(Buffer.from(STATUS_REQUEST, 'hex'))
         this.publishProblem()
+    }
+
+    // Process-local: a finish notification at startup is never a new completion.
+    private completionState: 'unarmed' | 'armed' | 'completed' = 'unarmed'
+
+    override processData(frame: Buffer) {
+        if (frame.length < 4 || frame[0] !== 0xaa || frame[frame.length - 1] !== 0xbb) return
+        if (frame[1] === 0xff) {
+            if (
+                frame.length < 18 ||
+                frame[2] !== CLASS_BYTE ||
+                frame[3] !== ENVELOPE_TYPE ||
+                frame.readUInt16BE(4) !== frame.length ||
+                frame.readUInt16BE(13) !== frame.length - 18 ||
+                crc16(frame.subarray(0, -3)) !== frame.readUInt16BE(frame.length - 3)
+            )
+                return
+            if (
+                frame[12] === STATUS_FRAME_TYPE &&
+                (frame[13] !== 0 || frame[14] !== STATUS_INNER_LEN || frame[15] !== 0 || frame[15 + RECORD_LEN] !== 0)
+            )
+                return
+            if (frame[12] === SINGLE_STATUS_FRAME_TYPE && frame[15] !== 0) return
+        } else {
+            if (frame[1] !== frame.length) return
+            const sum = frame.subarray(0, -2).reduce((a, b) => a + b, 0)
+            if (((sum & 0xff) ^ 0x55) !== frame[frame.length - 2]) return
+        }
+        super.processData(frame)
     }
 
     // BUNDLE values from the last record, plus writes not yet reflected in one
     private readonly bundle = new Map<BundleKey, number>()
-    // Changes from HA not yet sent, which a record arriving before they go out must not undo
-    private readonly unsent = new Map<BundleKey, number>()
     private course?: { code: number; loaded: number; on: boolean }
 
     // Why the last command from HA failed; cleared by the next one that goes through, or, for NO_COURSE_REASON,
@@ -720,12 +890,49 @@ export default class Device extends AABBDevice {
 
     private writeProps(...pairs: number[]) {
         const inner = Buffer.from([...SET_PROPERTY, pairs.length / 2, ...pairs])
-        this.queueWrite(() => inner)
+        const barrier = [PROP_COURSE, PROP_POWER, PROP_CYCLE].includes(pairs[0])
+        this.bundleGroup = undefined
+        this.bundleGroupId++
+        const owner = {}
+        const field = RECORD_PROPERTIES.find((field) => field.prop === pairs[0])
+        const key = barrier ? undefined : `singleton:${pairs[0]}`
+        if (field) {
+            this.pending.set(field.key, pairs[1])
+            this.pendingOwners.set(field.key, owner)
+        }
+        if (pairs[0] === PROP_COURSE) {
+            this.pending.set('course', pairs[1])
+            this.pendingOwners.set('course', owner)
+        }
+        if (pairs[0] === PROP_POWER) {
+            this.pending.set('power', pairs[1])
+            this.pendingOwners.set('power', owner)
+        }
+        this.queueWrite(() => {
+            if (field && this.pendingOwners.get(field.key) === owner) {
+                this.pending.delete(field.key)
+                this.pendingOwners.delete(field.key)
+            }
+            if (pairs[0] === PROP_COURSE && this.pendingOwners.get('course') === owner) {
+                this.pending.delete('course')
+                this.pendingOwners.delete('course')
+            }
+            if (pairs[0] === PROP_POWER && this.pendingOwners.get('power') === owner) {
+                this.pending.delete('power')
+                this.pendingOwners.delete('power')
+            }
+            if (pairs[0] !== PROP_POWER && !this.context(false)) return
+            if (pairs[0] === PROP_POWER && this.writesBlocked) return
+            if (pairs[0] === PROP_BUZZER) inner[5] = 0x33
+            return inner
+        }, key)
     }
 
     private writeCommand(command: number, value: number) {
+        this.bundleGroup = undefined
+        this.bundleGroupId++
         const inner = Buffer.from([...COMMAND, command, 0x01, value])
-        this.queueWrite(() => inner)
+        this.queueWrite(() => (this.context(false) ? inner : undefined))
     }
 
     protected writeType(inner: Buffer) {
@@ -734,27 +941,76 @@ export default class Device extends AABBDevice {
     }
 
     private processCommandReply(buf: Buffer) {
-        if (buf.length < 4 || buf[2] !== COMMAND[1] || !this.writeAnswered(COMMAND[1])?.own) return
-        this.setProblem(buf[3] === COMMAND_OK ? undefined : `Command refused (0x${hex2(buf[3])})`)
+        if (buf.length !== 4 || buf[2] !== COMMAND[1]) return
+        const write = this.writeAnswered(COMMAND[1])
+        if (!write) return
+        this.writeGeneration(write)
+        if (write.own) this.setProblem(buf[3] === COMMAND_OK ? undefined : `Command refused (0x${hex2(buf[3])})`)
     }
 
     private writeBundle(key: BundleKey, value: number) {
-        if (this.bundle.size !== BUNDLE.length) return
-        if (this.course?.on && this.course.code === NO_COURSE) return this.setProblem(NO_COURSE_REASON)
-        this.unsent.set(key, value)
+        if (!this.context() || this.bundle.size !== BUNDLE.length) return
+        if (!this.bundleGroup) this.bundleGroupId++
+        const groupId = this.bundleGroupId
+        const edits = this.bundleGroup ?? new Map<BundleKey, number>()
+        this.bundleGroup = edits
+        edits.set(key, value)
+        this.pending.set(key, value)
+        this.pendingOwners.set(key, edits)
         if (key === 'cold_wash' && value === 1) {
-            this.unsent.set('temp', COLD_WASH_TEMP)
-            this.unsent.set('soil', COLD_WASH_SOIL)
+            edits.set('temp', COLD_WASH_TEMP)
+            edits.set('soil', COLD_WASH_SOIL)
+            this.pending.set('temp', COLD_WASH_TEMP)
+            this.pending.set('soil', COLD_WASH_SOIL)
+            this.pendingOwners.set('temp', edits)
+            this.pendingOwners.set('soil', edits)
         }
         this.queueWrite(() => {
-            for (const [k, v] of this.unsent) this.bundle.set(k, v)
-            this.unsent.clear()
+            if (this.bundleGroup === edits) this.bundleGroup = undefined
+            for (const key of edits.keys())
+                if (this.pendingOwners.get(key) === edits) {
+                    this.pending.delete(key)
+                    this.pendingOwners.delete(key)
+                }
+            if (!this.context() || this.bundle.size !== BUNDLE.length) return
+            const values = new Map(this.bundle)
+            if (this.lastRecord)
+                for (const field of RECORD_PROPERTIES) {
+                    const confirmed = this.confirmed.get(field.prop)
+                    if (confirmed && Date.now() >= confirmed.until && BUNDLE.some((entry) => entry.key === field.key)) {
+                        this.confirmed.delete(field.prop)
+                        values.set(field.key as BundleKey, recordValue(this.lastRecord, field))
+                    }
+                }
+            for (const [key, value] of edits) values.set(key, value)
+            if (
+                values.get('cold_wash') === 1 &&
+                (values.get('temp') !== COLD_WASH_TEMP || values.get('soil')! > COLD_WASH_SOIL)
+            ) {
+                this.setProblem('Cold Wash requires Cold temperature and soil no higher than Medium')
+                return
+            }
+            if (
+                ![0, ...Object.keys(TEMP.forward).map(Number)].includes(values.get('temp')!) ||
+                ![0, ...Object.keys(SPIN.forward).map(Number)].includes(values.get('spin')!) ||
+                ![0, ...Object.keys(SOIL.forward).map(Number)].includes(values.get('soil')!) ||
+                ![0, ...Object.keys(RINSE.forward).map(Number)].includes(values.get('rinse')!) ||
+                !(
+                    values.get('reserve_time') === 0 ||
+                    (values.get('reserve_time')! >= RESERVE_TIME_MIN &&
+                        values.get('reserve_time')! <= RESERVE_TIME_MAX &&
+                        values.get('reserve_time')! % RESERVE_TIME_STEP === 0)
+                )
+            ) {
+                this.setProblem('Incomplete or unsupported settings in current status')
+                return
+            }
             const body = BUNDLE.flatMap(({ prop, key, width }) => {
-                const v = this.bundle.get(key)!
+                const v = values.get(key)!
                 return width === 2 ? [prop, v >> 8, v & 0xff] : [prop, v]
             })
             return Buffer.from([...SET_PROPERTY, BUNDLE.length, ...body])
-        })
+        }, `bundle:${groupId}`)
     }
 
     // The app sends Start with the course: 0a <code> 03 01.
@@ -763,13 +1019,12 @@ export default class Device extends AABBDevice {
         if (!this.course) return
         if (this.course.code !== COURSE_DOWNLOADED)
             return this.writeProps(PROP_COURSE, this.course.code, PROP_CYCLE, cycle)
-        // not captured from the app
-        const id = DOWNLOADED_COURSE_ID[COURSE.map(this.course.loaded) ?? '']
-        if (id !== undefined)
-            this.writeProps(PROP_COURSE, COURSE_DOWNLOADED, PROP_DOWNLOADED_COURSE, id, PROP_CYCLE, cycle)
+        this.setProblem('Downloaded Start is not captured and is unsupported')
     }
 
     setProperty(prop: string, value: string) {
+        if (this.writesBlocked) return
+        if (prop !== 'power' && !this.context(false)) return
         const cycle = CYCLE.unmap(prop)
         if (cycle !== undefined) return this.writeCycle(cycle)
         if (BUNDLE_SWITCHES.includes(prop as BundleKey)) {
@@ -780,7 +1035,7 @@ export default class Device extends AABBDevice {
         if (setting) {
             const idx = setting.unmap(value)
             if (idx === undefined) return
-            const coldWash = this.unsent.get('cold_wash') ?? this.bundle.get('cold_wash')
+            const coldWash = this.pending.get('cold_wash') ?? this.bundle.get('cold_wash')
             if (prop === 'soil' && coldWash === 1 && idx > COLD_WASH_SOIL) return
             this.writeBundle(prop as BundleKey, idx)
             return
@@ -821,15 +1076,84 @@ export default class Device extends AABBDevice {
         if (buf[1] === DRAWER_FRAME_TYPE) return this.processDrawer(buf)
         if (buf[1] === COMMAND_REPLY_TYPE) return this.processCommandReply(buf)
         if (buf[1] === WRITE_REPLY_TYPE) {
-            const own = this.writeAnswered(SET_PROPERTY[1])?.own
-            if (buf.length <= WRITE_REPLY_COUNT_OFFSET) return
-            const count = buf[WRITE_REPLY_COUNT_OFFSET]
-            const recordOffset = WRITE_REPLY_COUNT_OFFSET + 1 + 2 * count
-            const results = [...Array(count).keys()].map((i) => buf[WRITE_REPLY_COUNT_OFFSET + 2 + 2 * i])
-            const failed = results.find((result) => result !== undefined && !WRITE_OK.has(result))
-            if (own) this.setProblem(failed === undefined ? undefined : `Command refused (0x${hex2(failed)})`)
-            if (results.includes(WRITE_REFUSED) || results.includes(WRITE_BUSY)) return
-            return this.processStatus(buf, recordOffset, recordOffset + RECORD_LEN)
+            if (buf.length < 7 || buf[2] !== 0 || buf[3] !== 2 || buf[4] !== 1 || ![0xff, 0x33].includes(buf[5])) return
+            const count = buf[6]
+            const recordOffset = 7 + 2 * count
+            if (!count || buf.length !== recordOffset + RECORD_LEN || buf[recordOffset] !== 0) return
+            const properties = Array.from({ length: count }, (_, i) => buf[7 + i * 2])
+            if (new Set(properties).size !== count) return
+            const results = properties.map((_, i) => buf[8 + i * 2])
+            const write = this.writeAnswered(SET_PROPERTY[1], (write) => {
+                const expected = propertyIds(write.inner)
+                return (
+                    expected !== undefined &&
+                    expected.length === properties.length &&
+                    expected.every((id) => properties.includes(id))
+                )
+            })
+            if (!write) return
+            const generation = this.writeGeneration(write)
+            const failed = results.find((result) => !WRITE_OK.has(result))
+            if (write.own) this.setProblem(failed === undefined ? undefined : `Command refused (0x${hex2(failed)})`)
+            if (generation !== this.generation) return
+            const record = buf.subarray(recordOffset)
+            const accepted = (id: number) => {
+                const index = properties.indexOf(id)
+                return index >= 0 && WRITE_OK.has(results[index])
+            }
+            if (accepted(PROP_COURSE) || accepted(PROP_POWER)) {
+                this.generation++
+                this.confirmed.clear()
+                this.bundle.clear()
+                // Accepted course defaults are private command context, never a state echo.
+                if (accepted(PROP_COURSE)) {
+                    const requestedCourse = write.inner[8]
+                    const requestedDownloaded = write.inner[9] === PROP_DOWNLOADED_COURSE ? write.inner[10] : undefined
+                    const expectedLoaded =
+                        requestedCourse === COURSE_DOWNLOADED
+                            ? COURSE.unmap(
+                                  Object.entries(DOWNLOADED_COURSE_ID).find(
+                                      ([, id]) => id === requestedDownloaded,
+                                  )?.[0] ?? '',
+                              )
+                            : requestedCourse
+                    if (record[5] !== requestedCourse || record[20] !== expectedLoaded) {
+                        this.lastRecord = undefined
+                        this.confirmedCourse = undefined
+                        this.setProblem('Accepted course reply has stale course context; waiting for status')
+                        return
+                    }
+                    this.confirmedCourse = {
+                        code: record[5],
+                        loaded: record[20],
+                        previousCode: this.lastRecord?.[5],
+                        previousLoaded: this.lastRecord?.[20],
+                        until: Date.now() + CONFIRMED_STATE_MS,
+                    }
+                    if (!this.pending.has('course'))
+                        this.publishProperty(
+                            'course',
+                            COURSE.map(record[5] === COURSE_DOWNLOADED ? record[20] : record[5]),
+                        )
+                    this.lastRecord = Buffer.from(record)
+                    this.course = { code: record[5], loaded: record[20], on: record[21] !== 0 }
+                    this.loadBundle(record)
+                } else {
+                    if (!this.pending.has('power')) this.publishProperty('power', onOff(record[21] !== 0))
+                    this.lastRecord = undefined
+                    this.confirmedCourse = undefined
+                }
+                return
+            }
+            for (const field of RECORD_PROPERTIES) {
+                if (!accepted(field.prop)) continue
+                const value = recordValue(record, field)
+                this.confirmed.set(field.prop, { value, until: Date.now() + CONFIRMED_STATE_MS })
+                if (BUNDLE.some((entry) => entry.key === field.key)) this.bundle.set(field.key as BundleKey, value)
+            }
+            // Publish only matched accepted fields from this reply; all other values remain as observed.
+            this.publishAccepted(record, properties.filter(accepted))
+            return
         }
         if (buf.length < 13 || buf[1] !== ENVELOPE_TYPE) return
 
@@ -842,15 +1166,54 @@ export default class Device extends AABBDevice {
                 if (innerLen !== SINGLE_INNER_LEN) return
                 return this.processStatus(buf, SINGLE_RECORD_OFFSET, SINGLE_BUF_LEN)
             case EVENT_FRAME_TYPE:
+                if (
+                    innerLen === COMPLETION_INNER_LEN &&
+                    buf.length === 13 + COMPLETION_INNER_LEN + 1 &&
+                    buf.subarray(13, 19).equals(COMPLETION_PREFIX)
+                ) {
+                    if (this.completionState === 'armed') {
+                        this.completionState = 'completed'
+                        this.HA.publishProperty(this.id, 'cycle_finished', JSON.stringify({ event_type: 'finished' }), {
+                            retain: false,
+                        })
+                    }
+                    return
+                }
                 if (innerLen !== DOOR_EVENT_INNER_LEN) return
                 return this.processDoorEvent(buf)
         }
     }
 
+    private publishAccepted(record: Buffer, ids: number[]) {
+        for (const field of RECORD_PROPERTIES) {
+            if (!ids.includes(field.prop) || this.pending.has(field.key)) continue
+            const value = recordValue(record, field)
+            const settings: Partial<Record<string, Enum<string>>> = {
+                temp: TEMP,
+                spin: SPIN,
+                soil: SOIL,
+                rinse: RINSE,
+                buzzer: BUZZER,
+                splash_screen: SPLASH_SCREEN,
+            }
+            const setting = settings[field.key]
+            this.publishProperty(
+                field.key,
+                setting ? setting.map(value) : field.key === 'reserve_time' ? value : onOff(value !== 0),
+            )
+        }
+    }
+
+    private loadBundle(rec: Buffer) {
+        for (const field of RECORD_PROPERTIES)
+            if (BUNDLE.some((entry) => entry.key === field.key))
+                this.bundle.set(field.key as BundleKey, recordValue(rec, field))
+    }
+
     // The panel menu event (id 0x11) has the same length.
     private processDoorEvent(buf: Buffer) {
         if (buf.length !== DOOR_EVENT_BUF_LEN) return
-        if (DOOR_EVENT_ID_OFFSETS.some((o) => buf[o] !== DOOR_EVENT_ID)) return
+        if (!buf.subarray(13, 18).equals(DOOR_EVENT_PREFIX)) return
         const door = buf[DOOR_EVENT_VALUE_OFFSET]
         if (door !== DOOR_OPEN && door !== DOOR_SHUT) return
         this.publishProperty('door', door === DOOR_OPEN ? 'ON' : 'OFF')
@@ -863,9 +1226,43 @@ export default class Device extends AABBDevice {
 
     private processStatus(buf: Buffer, recordOffset: number, expectedLen: number) {
         if (buf.length !== expectedLen) return
-        const rec = buf.subarray(recordOffset, recordOffset + RECORD_LEN)
+        const rec = Buffer.from(buf.subarray(recordOffset, recordOffset + RECORD_LEN))
+        const previous = this.lastRecord
+        const confirmedCourse = this.confirmedCourse
+        if (confirmedCourse) {
+            if (rec[21] === 0 || (rec[5] === confirmedCourse.code && rec[20] === confirmedCourse.loaded))
+                this.confirmedCourse = undefined
+            else if (
+                rec[5] === confirmedCourse.previousCode &&
+                rec[20] === confirmedCourse.previousLoaded &&
+                Date.now() < confirmedCourse.until
+            ) {
+                rec[5] = confirmedCourse.code
+                rec[20] = confirmedCourse.loaded
+            } else {
+                if (Date.now() >= confirmedCourse.until)
+                    this.setProblem('Confirmed course expired before a matching status report')
+                this.confirmedCourse = undefined
+            }
+        }
+        if (previous && (previous[5] !== rec[5] || previous[20] !== rec[20] || (rec[21] === 0 && previous[21] !== 0))) {
+            this.generation++
+            this.confirmed.clear()
+        }
+        this.lastRecord = Buffer.from(rec)
+        for (const field of RECORD_PROPERTIES) {
+            const confirmed = this.confirmed.get(field.prop)
+            if (!confirmed) continue
+            if (Date.now() >= confirmed.until || recordValue(rec, field) === confirmed.value) {
+                if (Date.now() >= confirmed.until && recordValue(rec, field) !== confirmed.value)
+                    this.setProblem('Confirmed setting expired before a matching status report')
+                this.confirmed.delete(field.prop)
+            } else applyRecordValue(rec, field, confirmed.value)
+        }
 
         const state = rec[STATE_OFFSET]
+        if (state === 0 || state === 1) this.completionState = 'unarmed'
+        else if (this.completionState === 'unarmed' && [11, 12, 14, 41].includes(state)) this.completionState = 'armed'
         const isOff = state === STATE_POWEROFF
         const course = rec[COURSE_OFFSET]
 
@@ -882,6 +1279,7 @@ export default class Device extends AABBDevice {
         this.bundle.set('fresh_care', bit(rec[OPT3_OFFSET], OPT3_FRESH_CARE))
         this.bundle.set('reserve_time', rec.readUInt16BE(RESERVE_TIME_OFFSET))
 
+        this.publishingRecord = true
         this.publishProperty('power', isOff ? 'OFF' : 'ON')
         this.publishProperty('status', STATE.map(state))
         this.publishProperty('course', COURSE.map(course === COURSE_DOWNLOADED ? rec[LOADED_COURSE_OFFSET] : course))
@@ -889,8 +1287,15 @@ export default class Device extends AABBDevice {
         this.publishProperty('spin', SPIN.map(rec[SPIN_OFFSET]))
         this.publishProperty('temp', TEMP.map(rec[TEMP_OFFSET]))
         this.publishProperty('rinse', RINSE.map(rec[RINSE_OFFSET]))
-        this.publishProperty('remaining_time', isOff ? 0 : rec.readUInt16LE(REMAIN_TIME_OFFSET))
-        this.publishProperty('initial_time', isOff ? 0 : rec.readUInt16LE(INITIAL_TIME_OFFSET))
+        this.publishProperty(
+            'remaining_time',
+            state === 0 || state === 1
+                ? undefined
+                : course === 85 && state === 16
+                  ? 0
+                  : rec.readUInt16LE(REMAIN_TIME_OFFSET),
+        )
+        this.publishProperty('initial_time', isOff ? 0 : rec[INITIAL_TIME_OFFSET])
         this.publishProperty('energy', rec.readUInt16LE(SPENT_POWER_OFFSET))
         this.publishProperty('reserve_time', rec.readUInt16BE(RESERVE_TIME_OFFSET))
         this.publishProperty('delay_start', (rec[OPT5_OFFSET] & OPT5_DELAY_START) !== 0 ? 'ON' : 'OFF')
@@ -912,8 +1317,11 @@ export default class Device extends AABBDevice {
         this.publishProperty('child_lock', (rec[OPT4_OFFSET] & OPT4_CONTROL_LOCK) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('cycle_optimization', (rec[OPT6_OFFSET] & OPT6_CYCLE_OPTIMIZATION) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('remote_maintain', (rec[OPT6_OFFSET] & OPT6_REMOTE_MAINTAIN) !== 0 ? 'ON' : 'OFF')
-        this.publishProperty('door_lock', rec[DOOR_LOCK_OFFSET] !== 0 ? 'ON' : 'OFF')
+        this.publishProperty('door_lock', (rec[DOOR_LOCK_OFFSET] & DOOR_LOCK_MASK) !== 0 ? 'ON' : 'OFF')
+        this.publishProperty('remote_start', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_START) !== 0))
+        this.publishProperty('drawer', (rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) !== 0 ? 'OFF' : 'ON')
         this.publishProperty('quick_load_sense', onOff((rec[OPT7_OFFSET] & OPT7_QUICK_LOAD_SENSE) !== 0))
         this.publishProperty('splash_screen', SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]))
+        this.publishingRecord = false
     }
 }
