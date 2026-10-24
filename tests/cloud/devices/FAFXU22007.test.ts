@@ -31,6 +31,7 @@ describe('FAFXU22007 verified local behavior', () => {
     test('energy uses big-endian bytes17/18 independently of byte19, including carry and reset', () => {
         const { ha, thinq } = makeDevice()
         for (const [high, low, adjacent, expected] of [
+            [0, 252, 0, 252],
             [0, 255, 0, 255],
             [1, 0, 0, 256],
             [1, 2, 9, 258],
