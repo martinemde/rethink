@@ -39,8 +39,10 @@ to about10% of reported dryer energy (an implied correction near1.10x if all of
 that increment were dryer under-reporting). This is a conditional estimate,
 not a measured bound: background loads and comparison intervals may differ.
 
-Working assumption: values are correctly scaled Wh, possibly with modest
-calibration error. Do not apply a correction factor. An isolated dryer circuit
+Working assumption: values are correctly scaled Wh. Attribute the observed gap
+difference to background usage variance, not demonstrated dryer calibration
+error, until an isolated test establishes otherwise. Do not apply a correction
+factor. An isolated dryer circuit
 comparison is the planned way to verify calibration; no such test was performed
 or authorized by this note. This household cross-check concerns the dryer and
 does not independently calibrate the washer or SideKick.
