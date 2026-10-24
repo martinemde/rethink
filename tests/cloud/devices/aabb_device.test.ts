@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import AABBDevice from '@/cloud/devices/aabb_device'
+import AABBDevice, { type AwaitedWrite } from '@/cloud/devices/aabb_device'
 import type { Metadata } from '@/cloud/thinq'
 import { buf, MockHAConnection, MockThinq2Device } from '@/tests/helpers/mocks'
 
@@ -225,8 +225,8 @@ class WritingDevice extends AABBDevice {
     override processAABB(inner: Buffer) {
         if (inner[1] === 0xe6) this.answers.push(this.writeAnswered(0xe5)?.own === true)
     }
-    write(n: number) {
-        this.queueWrite(() => buf(`f0e5${hex2(n)}`))
+    write(n: number, key?: string) {
+        this.queueWrite(() => buf(`f0e5${hex2(n)}`), key)
     }
 }
 
@@ -291,5 +291,169 @@ describe('AABBDevice write queue', () => {
         assert.deepEqual(writes(), [1])
         thinq.send_packet(AABBDevice.frame(buf('f0e5ff')))
         assert.equal(thinq.listenerCount('sendData'), 0)
+    })
+})
+
+class StrictWritingDevice extends WritingDevice {
+    protected override readonly strictWriteTracking = true
+    timedOut: number[][] = []
+    get blocked() {
+        return this.writesBlocked
+    }
+    protected override writeTimedOut(writes: readonly AwaitedWrite[]) {
+        this.timedOut.push(writes.map((write) => write.inner[2]))
+    }
+    override processAABB(inner: Buffer) {
+        // This fixture uses one-byte property IDs; invalid or unrelated replies never settle a write.
+        if (inner.length !== 3 || inner[1] !== 0xe6) return
+        const write = this.writeAnswered(0xe5, (write) => write.inner[2] === inner[2])
+        if (write) this.answers.push(write.own)
+    }
+}
+
+function makeStrictWritingDevice() {
+    const thinq = new MockThinq2Device(DEVICE_ID, META)
+    const dev = new StrictWritingDevice(new MockHAConnection().asConnection(), thinq, false)
+    const reply = (n: number) => thinq.emit('data', AABBDevice.frame(buf(`20e6${hex2(n)}`)))
+    const writes = () => thinq.outbox.map((b) => b[4])
+    return { thinq, dev, reply, writes }
+}
+
+describe('AABBDevice strict write tracking', () => {
+    test('malformed and mismatched replies do not settle the oldest write', () => {
+        const { thinq, dev, reply, writes } = makeStrictWritingDevice()
+        dev.write(1)
+        dev.write(2)
+        thinq.emit('data', WRITE_REPLY)
+        reply(2)
+        assert.deepEqual(writes(), [1])
+        assert.deepEqual(dev.answers, [])
+        reply(1)
+        assert.deepEqual(writes(), [1, 2])
+        reply(2)
+        assert.deepEqual(dev.answers, [true, true])
+        dev.drop()
+    })
+
+    test('a predicate cannot skip an older same-type cloud write', () => {
+        const { thinq, dev, reply, writes } = makeStrictWritingDevice()
+        thinq.send_packet(AABBDevice.frame(buf('f0e501')))
+        thinq.send_packet(AABBDevice.frame(buf('f0e502')))
+        dev.write(3)
+        reply(2)
+        assert.deepEqual(dev.answers, [])
+        reply(1)
+        assert.deepEqual(writes(), [1, 2])
+        reply(2)
+        assert.deepEqual(writes(), [1, 2, 3])
+        reply(3)
+        assert.deepEqual(dev.answers, [false, false, true])
+        dev.drop()
+    })
+
+    test('timeout discards queued writes and blocks late replies and new writes until recreation', (t) => {
+        t.mock.timers.enable({ apis: ['setTimeout'] })
+        const { dev, reply, writes } = makeStrictWritingDevice()
+        dev.write(1)
+        dev.write(2)
+        t.mock.timers.tick(AABBDevice.WRITE_TIMEOUT_MS - 1)
+        assert.equal(dev.blocked, false)
+        t.mock.timers.tick(1)
+        assert.equal(dev.blocked, true)
+        assert.deepEqual(dev.timedOut, [[1]])
+        reply(1)
+        dev.write(3)
+        t.mock.timers.tick(AABBDevice.WRITE_TIMEOUT_MS)
+        assert.deepEqual(writes(), [1])
+        assert.deepEqual(dev.answers, [])
+        dev.drop()
+        const fresh = makeStrictWritingDevice()
+        fresh.dev.write(4)
+        assert.deepEqual(fresh.writes(), [4])
+        fresh.dev.drop()
+    })
+
+    test('a cloud write timeout also blocks the queue and reports its bytes', (t) => {
+        t.mock.timers.enable({ apis: ['setTimeout'] })
+        const { thinq, dev, writes } = makeStrictWritingDevice()
+        thinq.send_packet(AABBDevice.frame(buf('f0e5ff')))
+        dev.write(1)
+        t.mock.timers.tick(AABBDevice.WRITE_TIMEOUT_MS)
+        assert.deepEqual(writes(), [0xff])
+        assert.deepEqual(dev.timedOut, [[0xff]])
+        dev.drop()
+    })
+})
+
+describe('AABBDevice unsent setting coalescing', () => {
+    test('one bundle callback consumes all pending settings without losing a change', () => {
+        class BundleDevice extends WritingDevice {
+            pending = new Map<string, number>()
+            bundles: [string, number][][] = []
+            setting(key: string, value: number) {
+                this.pending.set(key, value)
+                this.queueWrite(() => {
+                    this.bundles.push([...this.pending])
+                    this.pending.clear()
+                    return buf('f0e510')
+                }, 'bundle')
+            }
+        }
+        const thinq = new MockThinq2Device(DEVICE_ID, META)
+        const dev = new BundleDevice(new MockHAConnection().asConnection(), thinq, false)
+        dev.write(0)
+        dev.setting('temp', 1)
+        dev.setting('spin', 2)
+        dev.setting('temp', 3)
+        assert.deepEqual(dev.bundles, [])
+        thinq.emit('data', WRITE_REPLY)
+        assert.deepEqual(dev.bundles, [
+            [
+                ['temp', 3],
+                ['spin', 2],
+            ],
+        ])
+        assert.equal(dev.pending.size, 0)
+        thinq.emit('data', WRITE_REPLY)
+        assert.equal(dev.bundles.length, 1, 'no redundant empty bundle is sent')
+        dev.drop()
+    })
+
+    test('only the newest unsent same-key setting is sent', () => {
+        const { thinq, dev, writes } = makeWritingDevice()
+        dev.write(1, 'setting')
+        dev.write(2, 'setting')
+        dev.write(3, 'setting')
+        assert.deepEqual(writes(), [1], 'the already-sent write is not replaced')
+        thinq.emit('data', WRITE_REPLY)
+        assert.deepEqual(writes(), [1, 3])
+        thinq.emit('data', WRITE_REPLY)
+        assert.deepEqual(writes(), [1, 3], 'the redundant callback was removed')
+        dev.drop()
+    })
+
+    test('coalescing preserves distinct settings and does not cross an action barrier', () => {
+        const { thinq, dev, writes } = makeWritingDevice()
+        dev.write(0)
+        dev.write(1, 'a')
+        dev.write(2, 'b')
+        dev.write(3, 'a')
+        dev.write(4) // action
+        dev.write(5, 'a')
+        dev.write(6, 'a')
+        for (let i = 0; i < 5; i++) thinq.emit('data', WRITE_REPLY)
+        assert.deepEqual(writes(), [0, 3, 2, 4, 6])
+        dev.drop()
+    })
+
+    test('unkeyed entries keep the legacy FIFO behavior', () => {
+        const { thinq, dev, writes } = makeWritingDevice()
+        dev.write(1)
+        dev.write(2)
+        dev.write(3)
+        thinq.emit('data', WRITE_REPLY)
+        thinq.emit('data', WRITE_REPLY)
+        assert.deepEqual(writes(), [1, 2, 3])
+        dev.drop()
     })
 })
