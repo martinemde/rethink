@@ -85,12 +85,22 @@ property-set matching prevent many wrong matches but cannot distinguish an
 otherwise identical duplicated same-property reply. Timeout therefore never
 retries and blocks until handler recreation.
 
-Washer remote-maintain is command-only feedback: it has no E6 record confirmation
-and never optimistically echoes. Accepted power invalidates command context;
-washer publishes the reply's actual power record but does not retain an option
-mask across power boundaries. A later passive power report is authoritative.
-Dryer power waits for passive evidence entirely. These safety exceptions do not
-claim every supported writable state has immediate authoritative feedback.
+Washer remote-maintain has no E6 record confirmation. After an exact successful
+command ACK, its requested value is shown as accepted, not observed. This assumes
+result 0 acknowledges acceptance of the correlated request; it does not prove the
+record bit changed. The raw record remains separate command context. Conflicting
+reports are held for at most 30 seconds; a matching report clears the overlay,
+and a mismatch after expiry publishes observed state with a diagnostic.
+
+Accepted power still invalidates command context. Washer power feedback uses the
+actual matched successful E6 record value, never a request guess. Dryer power
+feedback requires both a matched successful E6 and a record agreeing with the
+request; absent or stale records do not echo the requested power. Power feedback
+has the same 30-second bound, without changing observed status/course or implying
+that a cycle started. Course/session boundaries discard these overlays. Dryer
+remote-maintain remains an observed-only standby sensor: its bit is state, not a
+setting, and no new command is introduced. Start/Pause/Resume never echo state.
+The existing 3000 ms fail-closed queue timeout and no-retry policy are unchanged.
 
 ## Validation and ancestry
 
