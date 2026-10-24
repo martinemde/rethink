@@ -42,6 +42,7 @@ import TLVE5BB from './devices/TLVE5BB'
 import BDH_D30007_US from './devices/BDH_D30007_US'
 import FAFXU22007 from './devices/FAFXU22007'
 import BDVG_FX0003_US from './devices/BDVG_FX0003_US'
+import MI2U7B from './devices/MI2U7B'
 import DHUM_056905_WW from './devices/DHUM_056905_WW'
 import ST_B_E4H01Y_APL from './devices/ST_B_E4H01Y_APL'
 import WFV474PGV from './devices/WFV474PGV'
@@ -104,6 +105,7 @@ const t2deviceTypes: Record<string, T2Factory> = {
     BDH_D30007_US, // LG DLHC5502V heat-pump dryer, long 0xFF-escaped AABB framing with 42-byte records
     FAFXU22007, // LG WM6700HBA front-load washer, FAFXU25006's framing with 51-byte records
     BDVG_FX0003_US, // LG DLEX6700B electric dryer, BDH_D30007_US's record layout plus a temperature setting
+    MI2U7B, // LG SideKick, passive exact-model status and drawer events
     DHUM_056905_WW,
     ST_B_E4H01Y_APL,
     WFV474PGV, // LG double oven/range
