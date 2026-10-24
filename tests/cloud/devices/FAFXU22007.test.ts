@@ -133,6 +133,11 @@ describe('FAFXU22007 verified local behavior', () => {
         for (const key of ['ez_dispense_detergent', 'ez_dispense_softener', 'detergent_amount', 'softener_amount']) {
             assert.equal(c[key].platform, 'sensor')
             assert.equal(c[key].command_topic, undefined)
+            assert.equal(c[key].entity_category, undefined)
+        }
+        for (const key of ['detergent_amount', 'softener_amount']) {
+            assert.equal(c[key].device_class, 'volume')
+            assert.equal(c[key].unit_of_measurement, 'mL')
         }
     })
 })

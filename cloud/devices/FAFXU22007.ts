@@ -739,7 +739,6 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:flask',
                         device_class: 'volume',
                         unit_of_measurement: 'mL',
-                        entity_category: 'config',
                     },
                     softener_amount: {
                         platform: 'sensor',
@@ -749,7 +748,6 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:flower',
                         device_class: 'volume',
                         unit_of_measurement: 'mL',
-                        entity_category: 'config',
                     },
                     softener_tank_use: {
                         platform: 'sensor',
