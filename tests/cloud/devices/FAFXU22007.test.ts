@@ -2043,6 +2043,37 @@ describe('FAFXU22007 reconciled controls', () => {
         assert.equal(ha.devices[DEVICE_ID].properties.course, 'Heavy Duty')
     })
 
+    test('stale previous-course reports cannot replace accepted course defaults in a later bundle', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('course', 'Bedding')
+        const bedding = currentRecord(BEDDING)
+        thinq.emit('data', reply([0x0a], bedding))
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('soil', 'Light')
+        assert.equal(thinq.outbox.length, 2)
+        const inner = thinq.outbox[1].subarray(2, -2)
+        assert.notEqual(bedding[2], currentRecord()[2])
+        assert.notEqual(bedding[4], currentRecord()[4])
+        assert.equal(inner[8], bedding[2])
+        assert.equal(inner[10], bedding[4])
+        assert.equal(inner[12], 1)
+        assert.equal(inner[22], (bedding[34] & 0x20) !== 0 ? 1 : 0)
+    })
+
+    test('queued Start uses the course confirmed by the preceding course command', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('course', 'Bedding')
+        dev.setProperty('start', '')
+        assert.equal(thinq.outbox.length, 1)
+        thinq.emit('data', reply([0x0a], currentRecord(BEDDING)))
+        assert.equal(thinq.outbox.length, 2)
+        const inner = thinq.outbox[1].subarray(2, -2)
+        assert.deepEqual([...inner.subarray(7, 11)], [0x0a, 13, 0x03, 1])
+        dev.drop()
+    })
+
     test('accepted power and command ACK feedback are bounded and separate from observations', (ctx) => {
         const now = Date.now()
         const clock = ctx.mock.method(Date, 'now', () => now)
@@ -2074,6 +2105,18 @@ describe('FAFXU22007 reconciled controls', () => {
         thinq.emit('data', EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
+    })
+
+    test('stale accepted power records cannot mask a later observed power state', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('power', 'OFF')
+        thinq.emit('data', reply([0x02], currentRecord()))
+        const off = Buffer.from(EB_IDLE)
+        off[15 + 21] = 0
+        thinq.emit('data', checksum(off))
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'Off')
+        assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
     })
 
     test('newer queued power and remote-maintain intent suppress older accepted feedback', () => {

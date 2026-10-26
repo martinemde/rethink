@@ -894,6 +894,11 @@ export default class Device extends AABBDevice {
 
     private writeProps(...pairs: number[]) {
         const inner = Buffer.from([...SET_PROPERTY, pairs.length / 2, ...pairs])
+        const courseStart =
+            pairs[0] === PROP_COURSE &&
+            pairs.length === 4 &&
+            pairs[2] === PROP_CYCLE &&
+            pairs[3] === CYCLE.unmap('start')
         const barrier = [PROP_COURSE, PROP_POWER, PROP_CYCLE].includes(pairs[0])
         this.bundleGroup = undefined
         this.bundleGroupId++
@@ -927,6 +932,14 @@ export default class Device extends AABBDevice {
             }
             if (pairs[0] !== PROP_POWER && !this.context(false)) return
             if (pairs[0] === PROP_POWER && this.writesBlocked) return
+            if (courseStart) {
+                if (!this.course || this.course.code === COURSE_DOWNLOADED) {
+                    this.setProblem('Downloaded Start is not captured and is unsupported')
+                    return
+                }
+                // A preceding course write may have settled while Start waited in the queue.
+                inner[8] = this.course.code
+            }
             if (pairs[0] === PROP_BUZZER) inner[5] = 0x33
             return inner
         }, key)
@@ -1167,8 +1180,13 @@ export default class Device extends AABBDevice {
                     this.course = { code: record[5], loaded: record[20], on: record[21] !== 0 }
                     this.loadBundle(record)
                 } else {
-                    this.acceptedPower = { value: record[21] !== 0, until: Date.now() + CONFIRMED_STATE_MS }
-                    if (!this.pending.has('power')) this.publishProperty('power', onOff(this.acceptedPower.value))
+                    const requestedPower =
+                        write.inner.length === 9 && write.inner[7] === PROP_POWER ? write.inner[8] : undefined
+                    const observedPower = record[21] !== 0
+                    if ((requestedPower === 0 || requestedPower === 1) && observedPower === (requestedPower === 1)) {
+                        this.acceptedPower = { value: observedPower, until: Date.now() + CONFIRMED_STATE_MS }
+                        if (!this.pending.has('power')) this.publishProperty('power', onOff(observedPower))
+                    }
                     this.lastRecord = undefined
                     this.confirmedCourse = undefined
                 }
@@ -1278,8 +1296,8 @@ export default class Device extends AABBDevice {
                 rec[20] === confirmedCourse.previousLoaded &&
                 Date.now() < confirmedCourse.until
             ) {
-                rec[5] = confirmedCourse.code
-                rec[20] = confirmedCourse.loaded
+                // The rest of this old-course record is stale too; never pair the new course with its defaults.
+                return
             } else {
                 if (Date.now() >= confirmedCourse.until)
                     this.setProblem('Confirmed course expired before a matching status report')
