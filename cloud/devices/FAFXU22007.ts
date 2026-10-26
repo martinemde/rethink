@@ -269,9 +269,9 @@ const DOWNLOADED_COURSE_ID: Partial<Record<string, number>> = {
 // 0 on courses without the setting, here and for temp and spin
 const SOIL = Enum.of({
     Light: 1,
-    'Med. Light': 2,
+    'Medium Light': 2,
     Medium: 3,
-    'Med. Heavy': 4,
+    'Medium Heavy': 4,
     Heavy: 5,
 })
 
@@ -280,7 +280,7 @@ const TEMP = Enum.of({
     Cold: 14,
     Warm: 16,
     Hot: 18,
-    'Ex. Hot': 19,
+    'Extra Hot': 19,
 })
 
 const RINSE = Enum.of({
@@ -295,7 +295,7 @@ const SPIN = Enum.of({
     Low: 13,
     Medium: 14,
     High: 15,
-    'Ex. High': 16,
+    'Extra High': 16,
 })
 
 const BUZZER = Enum.of({

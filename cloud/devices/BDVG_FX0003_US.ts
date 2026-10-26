@@ -224,9 +224,9 @@ const DRY_LEVEL = Enum.of({
 // 0 on Air Dry and Rack Dry
 const TEMP = Enum.of({
     Low: 1,
-    'Med. Low': 2,
+    'Medium Low': 2,
     Medium: 3,
-    'Med. High': 4,
+    'Medium High': 4,
     High: 5,
 })
 

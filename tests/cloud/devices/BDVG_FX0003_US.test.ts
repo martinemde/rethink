@@ -729,9 +729,9 @@ describe('BDVG_FX0003_US', () => {
     test('Temp laps 5 -> 1 -> 2 -> 3 -> 4 -> 5 on Timed Dry', () => {
         const cases: [Buffer, string][] = [
             [TEMP_LOW, 'Low'],
-            [TEMP_MEDIUM_LOW, 'Med. Low'],
+            [TEMP_MEDIUM_LOW, 'Medium Low'],
             [TEMP_MEDIUM, 'Medium'],
-            [TEMP_MEDIUM_HIGH, 'Med. High'],
+            [TEMP_MEDIUM_HIGH, 'Medium High'],
             [TEMP_HIGH, 'High'],
         ]
         for (const [frame, label] of cases) assert.equal(feed([frame]).temp, label, label)
@@ -961,9 +961,9 @@ describe('BDVG_FX0003_US', () => {
             ['dry_level', 'Very', APPW_000829, REC_000811],
             ['course', 'Timed Dry', APPW_000911, undefined],
             ['temp', 'Low', APPW_001126, REC_000913],
-            ['temp', 'Med. Low', APPW_001130, REC_001128],
+            ['temp', 'Medium Low', APPW_001130, REC_001128],
             ['temp', 'Medium', APPW_001135, REC_001132],
-            ['temp', 'Med. High', APPW_001140, REC_001137],
+            ['temp', 'Medium High', APPW_001140, REC_001137],
             ['temp', 'High', APPW_001146, REC_001142],
             ['dry_time', '20', APPW_001236, REC_001148],
             ['dry_time', '30', APPW_001241, REC_001238],
@@ -1488,7 +1488,7 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
         thinq.emit('data', EB_CONNECT)
         dev.setProperty('temp', 'Low')
         dev.setProperty('temp', 'Medium')
-        dev.setProperty('temp', 'Med. Low')
+        dev.setProperty('temp', 'Medium Low')
         dev.setProperty('dry_time', '20')
         dev.setProperty('steam', 'ON')
         thinq.emit('data', writeReply(thinq.outbox[0]))
