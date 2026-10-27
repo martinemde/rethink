@@ -11,8 +11,10 @@ import Dev_2REF11EIDA__4 from './devices/2REF11EIDA__4'
 import Dev_2REF11EIDG__4 from './devices/2REF11EIDG__4'
 import Dev_2REF11EBIVPC4 from './devices/2REF11EBIVPC4'
 import Dev_2REFTBDII4P_U from './devices/2REFTBDII4P_U'
+import Dev_2REF11EII__M2 from './devices/2REF11EII__M2'
 import Dev_2RES1VE61NFA2 from './devices/2RES1VE61NFA2'
 import Dev_2REB1GLVB1__2 from './devices/2REB1GLVB1__2'
+import Dev_2REBGLUB_2P__ from './devices/2REBGLUB_2P__'
 import Dev_2RES1VE600FWC from './devices/2RES1VE600FWC'
 import STUDIO_HOOD from './devices/STUDIO_HOOD'
 import WMVEM1825 from './devices/WMVEM1825'
@@ -74,8 +76,10 @@ const t2deviceTypes: Record<string, T2Factory> = {
     '2REF11EIDG__4': Dev_2REF11EIDG__4,
     '2REF11EBIVPC4': Dev_2REF11EBIVPC4,
     '2REFTBDII4P_U': Dev_2REFTBDII4P_U,
+    '2REF11EII__M2': Dev_2REF11EII__M2,
     '2RES1VE61NFA2': Dev_2RES1VE61NFA2,
     '2REB1GLVB1__2': Dev_2REB1GLVB1__2,
+    '2REBGLUB_2P__': Dev_2REBGLUB_2P__, // LG GBBSJ2CCEP bottom-freezer (EU), BK7234 modem
     '2RES1VE600FWC': Dev_2RES1VE600FWC,
     '2REFT1DIC4P_U': Dev_2REFT1DIC4P_U,
     STUDIO_HOOD,
@@ -118,8 +122,12 @@ const t2deviceTypes: Record<string, T2Factory> = {
     'F_V7_Y___W.B_2QEUK': F_V8_Y___W_B_2QEUK, // NOTE: we reuse F_V8_Y___W_B_2QEUK as the models appear to be compatible
     'F_V7_Y___W.B__QEUK': F_V8_Y___W_B_2QEUK, // LG F2V5PS0W front-load washer - confirmed working, status/course/spin/temp/energy/remaining_time all decode correctly against a real unit
     'F_V__Y___W.B_2QEUK': F_V8_Y___W_B_2QEUK, // NOTE: we reuse F_V8_Y___W_B_2QEUK as the models appear to be compatible
+    'F_V__Y___W.B__QEUK': F_V8_Y___W_B_2QEUK, // LG WV9-1609B front-load washer (AU), status/course/temp/spin/times/cycles/locks checked against bridged LG cloud state and the panel
     'F_VA_F___W.B__QEUK': F_V__F___W_B_1QEUK, // FV1413H2BA front-load washer SoftAP model (deviceType 201)
     RC90V9_WW: RC90U2_WW, // LG RC91V9EV2Q heat pump dryer, same records
+    D2211: D0211, // LG XD3A25MB dishwasher (deviceType 204), same 0x18-byte records, checked against bridged LG cloud state
+    RC90V9_AUS: RC90U2_WW, // LG DVH9-09B heat pump dryer (AU), same records, checked against bridged LG cloud state
+    '2RES1VE61NFWA': Dev_2RES1VE600FWC,
 }
 
 class Bridge {
