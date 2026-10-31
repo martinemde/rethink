@@ -151,19 +151,19 @@ for (const c of cases)
             calls.length = 0
             thinq.emit('data', finish())
             assert.equal(p.load_waiting, 'ON')
-            assert.ok(calls.indexOf('load_waiting/attributes') < calls.indexOf('load_waiting'))
-            const attributes = JSON.parse(p['load_waiting/attributes'] as string)
+            assert.ok(calls.indexOf('load_waiting_attributes') < calls.indexOf('load_waiting'))
+            const attributes = JSON.parse(p['load_waiting_attributes'] as string)
             assert.equal(attributes.finished_ts, new Date(now).toISOString())
             const finished = store.get(thinq.id).completionReceivedAt
             // Simulate loss of retained broker state without losing the integration's cache.
             delete p.load_waiting
-            delete p['load_waiting/attributes']
+            delete p['load_waiting_attributes']
             calls.length = 0
             const sends = thinq.sent.length
             dev.publishConfig()
             assert.equal(p.load_waiting, 'ON')
-            assert.equal(JSON.parse(p['load_waiting/attributes'] as string).finished_ts, attributes.finished_ts)
-            assert.ok(calls.indexOf('load_waiting/attributes') < calls.indexOf('load_waiting'))
+            assert.equal(JSON.parse(p['load_waiting_attributes'] as string).finished_ts, attributes.finished_ts)
+            assert.ok(calls.indexOf('load_waiting_attributes') < calls.indexOf('load_waiting'))
             assert.equal(calls.includes('last_report_at'), false)
             assert.equal(calls.includes('last_door_report_at'), false)
             assert.equal(calls.includes('cycle_finished'), false)

@@ -1119,7 +1119,7 @@ function applianceProperties(properties: Record<string, string | number>) {
     return Object.fromEntries(
         Object.entries(properties).filter(
             ([key]) =>
-                !['load_waiting', 'load_waiting/attributes', 'last_report_at', 'last_door_report_at'].includes(key),
+                !['load_waiting', 'load_waiting_attributes', 'last_report_at', 'last_door_report_at'].includes(key),
         ),
     )
 }

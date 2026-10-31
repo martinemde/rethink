@@ -6,7 +6,7 @@ export const laundryComponents = (door: 'door' | 'drawer') => ({
         platform: 'binary_sensor',
         unique_id: '$deviceid-load_waiting',
         state_topic: '$this/load_waiting',
-        json_attributes_topic: '$this/load_waiting/attributes',
+        json_attributes_topic: '$this/load_waiting_attributes',
         name: 'Load waiting',
         icon: 'mdi:basket-check',
     },
@@ -50,7 +50,7 @@ export class LaundrySupport {
             if (force) this.device.HA.publishProperty(this.device.id, key, value)
             else this.device.publishProperty(key, value)
         }
-        publish('load_waiting/attributes', JSON.stringify(attributes))
+        publish('load_waiting_attributes', JSON.stringify(attributes))
         publish('load_waiting', state.waiting === null ? undefined : state.waiting ? 'ON' : 'OFF')
     }
 
