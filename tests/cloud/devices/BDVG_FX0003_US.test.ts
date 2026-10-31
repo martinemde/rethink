@@ -688,7 +688,7 @@ describe('BDVG_FX0003_US', () => {
             remote_maintain: 'OFF',
             energy_saver: 'OFF',
             keep_fresh: 'OFF',
-            current_time_display: 'OFF',
+            clock_display: 'OFF',
             splash_screen: 'Snowman 1', // what the app showed until it was changed on 09-25
         })
     })
@@ -952,7 +952,7 @@ describe('BDVG_FX0003_US', () => {
             ['keep_fresh', 'switch'],
             ['cycle_optimization', 'switch'],
             ['splash_screen', 'select'],
-            ['current_time_display', 'switch'],
+            ['clock_display', 'switch'],
             ['start', 'button'],
             ['pause', 'button'],
             ['resume', 'button'],
@@ -1385,15 +1385,15 @@ describe('BDVG_FX0003_US remote maintain', () => {
     test('the standby clock switch writes prop 0x58 and reads rec[28] bit 0x20', () => {
         const { ha, thinq, dev } = makeDevice()
         thinq.emit('data', REC_CLOCK_OFF)
-        assert.equal(ha.devices[DEVICE_ID].properties.current_time_display, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, 'OFF')
         thinq.emit('data', REC_CLOCK_ON)
-        assert.equal(ha.devices[DEVICE_ID].properties.current_time_display, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
         assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, 'OFF')
-        dev.setProperty('current_time_display', 'ON')
+        dev.setProperty('clock_display', 'ON')
         assert.deepEqual(thinq.outbox.map(hex), [hex(W_CLOCK_ON)])
         const second = makeDevice()
-        second.dev.setProperty('current_time_display', 'OFF')
+        second.dev.setProperty('clock_display', 'OFF')
         assert.deepEqual(second.thinq.outbox.map(hex), [hex(W_CLOCK_OFF)])
     })
 })
@@ -1661,6 +1661,90 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
         dev.setProperty('power', 'ON')
         assert.equal(thinq.outbox.length, 1)
         assert.deepEqual(acks(thinq), [])
+    })
+})
+
+describe('BDVG_FX0003_US assumed clock commands', () => {
+    test('Hide/Show config buttons send washer-compatible frames without clock state', () => {
+        for (const [key, expected] of [
+            ['hide_clock', 'aa0df0e5000201ff015800b2bb'],
+            ['show_clock', 'aa0df0e5000201ff015801bdbb'],
+        ]) {
+            const { ha, thinq, dev } = makeDevice()
+            dev.publishConfig()
+            const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+            assert.equal(components.clock_display, undefined)
+            const c = components[key]
+            assert.equal(c.platform, 'button')
+            assert.equal(c.entity_category, 'config')
+            assert.equal(c.command_topic, `$this/${key}/set`)
+            assert.equal(c.payload_press, '')
+            assert.equal(c.state_topic, undefined)
+            assert.equal(c.retain, false)
+            thinq.emit('data', EB_CONNECT)
+            const before = { ...ha.devices[DEVICE_ID].properties }
+            dev.setProperty(key, '')
+            assert.deepEqual(thinq.outbox, [buf(expected)])
+            thinq.emit('data', writeReply(thinq.outbox[0], Buffer.from(EB_CONNECT.subarray(15, 57))))
+            assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
+            assert.equal(ha.devices[DEVICE_ID].properties.clock_display, undefined)
+            dev.drop()
+        }
+    })
+
+    test('invalid button payloads and absent/Off context cannot send or power on', () => {
+        const { thinq, dev } = makeDevice()
+        dev.setProperty('hide_clock', '')
+        thinq.emit('data', EB_CONNECT)
+        for (const key of ['hide_clock', 'show_clock'])
+            for (const value of ['ON', 'OFF', '0', '1', 'true', ' ', 'PRESS']) dev.setProperty(key, value)
+        const off = Buffer.from(EB_CONNECT.subarray(15, 57))
+        off[13] = 0
+        thinq.emit('data', longFrame(0xeb, off))
+        dev.setProperty('hide_clock', '')
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(thinq.sent, [])
+    })
+
+    test('commands serialize and require exact E6 property matching, without accepted state', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_CONNECT)
+        dev.setProperty('hide_clock', '')
+        dev.setProperty('show_clock', '')
+        assert.equal(thinq.outbox.length, 1)
+        const wrong = Buffer.from(thinq.outbox[0])
+        wrong[9] = 0x51
+        thinq.emit('data', writeReply(wrong))
+        assert.equal(thinq.outbox.length, 1)
+        thinq.emit('data', writeReply(thinq.outbox[0], undefined, new Map([[0x58, 3]])))
+        assert.equal(thinq.outbox.length, 2)
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /refused/)
+        thinq.emit('data', writeReply(thinq.outbox[1]))
+        assert.equal(ha.devices[DEVICE_ID].properties.problem, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, undefined)
+        assert.equal(ha.devices[DEVICE_ID].properties.hide_clock, undefined)
+        assert.equal(ha.devices[DEVICE_ID].properties.show_clock, undefined)
+    })
+
+    test('timeout blocks queued clock command, late E6 and future commands', (ctx) => {
+        const original = global.setTimeout
+        let expire: (() => void) | undefined
+        ctx.mock.method(global, 'setTimeout', ((handler: () => void, timeout: number) => {
+            if (timeout === 3000) expire = handler
+            return original(() => {}, 1_000_000).unref()
+        }) as typeof setTimeout)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_CONNECT)
+        dev.setProperty('hide_clock', '')
+        dev.setProperty('show_clock', '')
+        expire!()
+        thinq.emit('data', writeReply(thinq.outbox[0]))
+        thinq.emit('data', EB_CONNECT)
+        dev.setProperty('hide_clock', '')
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, undefined)
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /timed out/)
+        dev.drop()
     })
 })
 

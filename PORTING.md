@@ -147,3 +147,66 @@ Provisional phase labels and the completion signature retain that evidence limit
 Washer BE16@17 is supported by two saved within-run high-byte carries where
 upstream LE16@18 drops backwards. See `ENERGY.md`; this establishes counter
 layout evidence separately from Wh calibration.
+
+
+## Clock display support (2026-10-31)
+
+Source: `../upstream-review-2026-10-31.md` and trialskid's
+[2026-10-26 PR204 comment](https://github.com/anszom/rethink/pull/204#issuecomment-6424596501),
+reported for WM6700HBA / FAFXU22007 firmware 2.11.258. This is contributor
+capture/acceptance evidence, not our own physical verification. Record indices
+are assumed zero-based, consistent with the existing handler.
+
+Washer adds one Configuration **Clock display** switch (`clock_display`),
+E5 property `0x58`, values 0/1. Reported state is only record47 mask `0x80`.
+Nozzle-clean mask `0x60` in the same byte and splash property `0x51` / record46
+remain separate and unchanged. Clock participates in `RECORD_PROPERTIES`, the
+existing serialized fail-closed queue, and bounded accepted-record reconciliation.
+Only an actual matching successful E6 record supplies accepted clock feedback;
+requested values are never echoed. The existing 30-second bound, course/Off
+invalidation and 3000ms unanswered-write lockout remain unchanged.
+
+At the user's explicit request, dryer adds Configuration **Hide clock** and
+**Show clock** buttons (`hide_clock`, `show_clock`, empty press payload). These
+assume the same E5 `0x58` boolean setter as the washer. **Dryer compatibility is
+unverified**, and no dryer reported clock offset is established. There is no
+dryer clock state, accepted-value overlay or optimistic requested echo. E6 replies
+use existing exact-property matching to settle the queue and report refusal only.
+The washer's record47 is not applied to the 42-byte dryer record.
+
+All three controls explicitly use non-retained commands. Retained deliveries are
+rejected by the existing MQTT router. Both models still require passive known
+powered-on command context; hiding a clock while Off is rejected locally. No
+automatic power-on, startup command, query, retry, time sync, ACK or clock change
+was added. An Off dryer must first be powered on by the user and report valid
+context before its button can send; this work must not be described as having
+hidden either physical clock. Implementation and validation here were offline
+with mocked transports; deployment/physical writes belong to a separate parent
+operation.
+
+The reviewed command strings were independently checked: both contain 13 bytes
+(length `0x0d`), and the short checksum is the low 8 bits of the byte sum excluding
+the checksum and final BB, XOR `0x55`. OFF's sum is `0xe7`, checksum `0xb2`;
+ON's sum is `0xe8`, checksum `0xbd`. Thus the reviewed examples
+`aa0df0e5000201ff015800b2bb` and `aa0df0e5000201ff015801bdbb` are checksum-valid.
+These exact validated strings are tested; arbitrary unvalidated contributor
+examples are not promoted to fixtures. New status/E6 cases are synthetic variants
+of sanitized existing fixtures, not additional physical capture claims.
+
+Enabling display is **not time synchronization** and does not fix the reported
+`--:--` clock. No 12/24-hour or date controls, splash entries 12–14, dryer status
+offset, or speculative clock protocol are added.
+
+Changed constants: both models add `PROP_CLOCK_DISPLAY = 0x58`; washer adds
+`CLOCK_DISPLAY_OFFSET = 47` and `CLOCK_DISPLAY_MASK = 0x80`. Existing constants,
+framing/checksum algorithms, dependencies and lockfile are unchanged.
+
+Offline validation: **1152/1152 tests passed**, `mise exec -- npm run check`,
+`GIT_REVISION=$(git rev-parse HEAD) mise exec -- npm run build` and
+`git diff --check` passed. The build identifies the existing base HEAD `9f8e2b2`;
+these feature edits are uncommitted. Focused coverage includes invalid commands,
+non-retained discovery/router delivery, checksum/length validation, mask isolation,
+matched/refused/wrong-property E6 replies, actual-versus-requested values,
+30-second expiry, matching status, queue coalescing, course/Off boundaries and
+fail-closed timeout. No deployment or physical command was performed by this
+implementation worker.

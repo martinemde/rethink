@@ -929,7 +929,7 @@ const APPW_003818 = buf('aa0df0e5000201ff015600b0bb')
 // 00:38:30 UTC 09-25, the ThinQ app writing quick_load_sense = ON.
 const APPW_003830 = buf('aa0df0e5000201ff015601b3bb')
 
-// The ThinQ app writing current_time_display = OFF and ON, captured by another WM6700HBA owner on firmware
+// The ThinQ app writing clock_display = OFF and ON, captured by another WM6700HBA owner on firmware
 // 2.11.258 (PR #204).
 const APPW_CLOCK_OFF = buf('aa0df0e5000201ff015800b2bb')
 const APPW_CLOCK_ON = buf('aa0df0e5000201ff015801bdbb')
@@ -1164,7 +1164,7 @@ describe('FAFXU22007', () => {
             door_lock: 'OFF',
             quick_load_sense: 'ON',
             splash_screen: 'Normal',
-            current_time_display: 'OFF',
+            clock_display: 'OFF',
             drawer: 'OFF',
             remote_start: 'OFF',
         })
@@ -1380,9 +1380,9 @@ describe('FAFXU22007', () => {
         const sum = frame.subarray(0, frame.length - 2).reduce((pv, cv) => pv + cv, 0)
         frame[frame.length - 2] = (sum & 0xff) ^ 0x55
         const p = feed([frame])
-        assert.equal(p.current_time_display, 'ON')
+        assert.equal(p.clock_display, 'ON')
         assert.equal(p.nozzle_clean_tank, 'Both Tanks')
-        assert.equal(feed([EB_IDLE]).current_time_display, 'OFF')
+        assert.equal(feed([EB_IDLE]).clock_display, 'OFF')
     })
 
     test('times and energy are big-endian', () => {
@@ -1542,7 +1542,7 @@ describe('FAFXU22007', () => {
             ['fresh_care', 'switch'],
             ['cycle_optimization', 'switch'],
             ['quick_load_sense', 'switch'],
-            ['current_time_display', 'switch'],
+            ['clock_display', 'switch'],
             ['remote_maintain', 'switch'],
             ['splash_screen', 'select'],
             ['start', 'button'],
@@ -1591,8 +1591,8 @@ describe('FAFXU22007', () => {
             ['reserve_time', '0', APPW_003747, REC_003732],
             ['quick_load_sense', 'OFF', APPW_003818, undefined],
             ['quick_load_sense', 'ON', APPW_003830, undefined],
-            ['current_time_display', 'OFF', APPW_CLOCK_OFF, undefined],
-            ['current_time_display', 'ON', APPW_CLOCK_ON, undefined],
+            ['clock_display', 'OFF', APPW_CLOCK_OFF, undefined],
+            ['clock_display', 'ON', APPW_CLOCK_ON, undefined],
             ['cycle_optimization', 'OFF', APPW_003914, undefined],
             ['cycle_optimization', 'ON', APPW_003919, undefined],
             ['splash_screen', 'Snowman 1', APPW_003939, undefined],
@@ -1925,6 +1925,163 @@ function currentRecord(source = EB_IDLE) {
     return Buffer.from(source.subarray(source[12] === 0xec ? 66 : 15, source.length - 3))
 }
 const BUNDLE_IDS = [0x1f, 0x21, 0x1e, 0x20, 0x3e, 0x34, 0x38, 0x35, 0x44, 0x7f]
+
+describe('FAFXU22007 clock display', () => {
+    test('is a config switch; valid commands match independently checked contributor frames', () => {
+        for (const [value, expected] of [
+            ['OFF', 'aa0df0e5000201ff015800b2bb'],
+            ['ON', 'aa0df0e5000201ff015801bdbb'],
+        ]) {
+            const { ha, thinq, dev } = makeDevice()
+            dev.publishConfig()
+            const c = ha.devices[DEVICE_ID].config!.components.clock_display as Record<string, unknown>
+            assert.equal(c.platform, 'switch')
+            assert.equal(c.device_class, 'switch')
+            assert.equal(c.entity_category, 'config')
+            assert.equal(c.icon, 'mdi:clock-outline')
+            assert.equal(c.command_topic, '$this/clock_display/set')
+            assert.equal(c.retain, false)
+            thinq.emit('data', EB_IDLE)
+            dev.setProperty('clock_display', value)
+            const frame = buf(expected)
+            assert.equal(frame.length, frame[1])
+            assert.equal((frame.subarray(0, -2).reduce((sum, b) => sum + b, 0) & 255) ^ 0x55, frame[frame.length - 2])
+            assert.deepEqual(thinq.outbox, [frame])
+            assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+            dev.drop()
+        }
+    })
+
+    test('invalid values and missing or Off context send nothing and never power on', () => {
+        const { thinq, dev } = makeDevice()
+        dev.setProperty('clock_display', 'OFF')
+        thinq.emit('data', EB_IDLE)
+        for (const value of ['', 'on', 'off', '1', '0', 'true', 'false', 'ON ', 'unknown'])
+            dev.setProperty('clock_display', value)
+        thinq.emit('data', POWER_OFF)
+        dev.setProperty('clock_display', 'OFF')
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(thinq.sent, [])
+    })
+
+    test('rec47 clock mask is isolated from nozzle clean and splash screen', () => {
+        for (const [nozzle, name] of [
+            [0, 'None'],
+            [0x20, 'Detergent Tank'],
+            [0x40, 'Softener Tank'],
+            [0x60, 'Both Tanks'],
+        ] as const) {
+            for (const clock of [0, 0x80]) {
+                const frame = Buffer.from(EB_IDLE)
+                frame[15 + 47] = nozzle | clock | 0x1f
+                frame[15 + 46] = 9
+                const p = feed([checksum(frame)])
+                assert.equal(p.clock_display, clock ? 'ON' : 'OFF')
+                assert.equal(p.nozzle_clean_tank, name)
+                assert.equal(p.splash_screen, 'Halloween')
+            }
+        }
+    })
+
+    test('matched E6 uses actual clock bit only, including refusal and wrong property', () => {
+        for (const result of [0, 0x10, 0x11, 3, 0x13]) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', EB_IDLE)
+            dev.setProperty('clock_display', 'ON')
+            const actual = currentRecord()
+            actual[47] = 0xe0
+            actual[46] = 9
+            thinq.emit('data', reply([0x51], actual))
+            assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+            thinq.emit('data', reply([0x58], actual, [result]))
+            const p = ha.devices[DEVICE_ID].properties
+            assert.equal(p.clock_display, [0, 0x10, 0x11].includes(result) ? 'ON' : 'OFF')
+            assert.equal(p.nozzle_clean_tank, 'None')
+            assert.equal(p.splash_screen, 'Normal')
+            dev.drop()
+        }
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('clock_display', 'ON')
+        thinq.emit('data', reply([0x58], currentRecord()))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+    })
+
+    test('accepted bit overlay preserves nozzle bits, expires at 30 seconds and clears on observed match', (ctx) => {
+        const now = Date.now()
+        const clock = ctx.mock.method(Date, 'now', () => now)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('clock_display', 'ON')
+        const actual = currentRecord()
+        actual[47] = 0x80
+        thinq.emit('data', reply([0x58], actual))
+        const stale = Buffer.from(EB_IDLE)
+        stale[15 + 47] = 0x40
+        clock.mock.mockImplementation(() => now + 29_999)
+        thinq.emit('data', checksum(stale))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.nozzle_clean_tank, 'Softener Tank')
+        clock.mock.mockImplementation(() => now + 30_000)
+        thinq.emit('data', checksum(stale))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
+        dev.setProperty('clock_display', 'ON')
+        thinq.emit('data', reply([0x58], actual))
+        const matched = Buffer.from(stale)
+        matched[15 + 47] |= 0x80
+        thinq.emit('data', checksum(matched))
+        thinq.emit('data', checksum(stale))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+    })
+
+    test('clock timeout fails closed without retry or late reply state', (ctx) => {
+        const original = global.setTimeout
+        let expire: (() => void) | undefined
+        ctx.mock.method(global, 'setTimeout', ((handler: () => void, timeout: number) => {
+            if (timeout === 3000) expire = handler
+            return original(() => {}, 1_000_000).unref()
+        }) as typeof setTimeout)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('clock_display', 'ON')
+        dev.setProperty('clock_display', 'OFF')
+        expire!()
+        const actual = currentRecord()
+        actual[47] = 0x80
+        thinq.emit('data', reply([0x58], actual))
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('clock_display', 'ON')
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /timed out/)
+        dev.drop()
+    })
+
+    test('queued latest intent suppresses old acceptance; course and Off invalidate late replies', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('clock_display', 'ON')
+        dev.setProperty('clock_display', 'ON')
+        dev.setProperty('clock_display', 'OFF')
+        const on = currentRecord()
+        on[47] = 0x80
+        thinq.emit('data', reply([0x58], on))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+        assert.equal(thinq.outbox.length, 2)
+        assert.equal(thinq.outbox[1][10], 0)
+        thinq.emit('data', reply([0x58], currentRecord()))
+        for (const boundary of [BEDDING, POWER_OFF]) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', EB_IDLE)
+            dev.setProperty('clock_display', 'ON')
+            thinq.emit('data', boundary)
+            const before = { ...ha.devices[DEVICE_ID].properties }
+            thinq.emit('data', reply([0x58], on))
+            assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
+        }
+    })
+})
 
 describe('FAFXU22007 reconciled controls', () => {
     test('accepted course with stale embedded course cannot invent defaults or publish a course', () => {

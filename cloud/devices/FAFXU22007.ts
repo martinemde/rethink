@@ -80,7 +80,7 @@ const PROP_BUZZER = 0x13
 const PROP_CYCLE_OPTIMIZATION = 0x4c
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_QUICK_LOAD_SENSE = 0x56
-const PROP_CURRENT_TIME_DISPLAY = 0x58 // modelJSON currentTimeDisplay
+const PROP_CLOCK_DISPLAY = 0x58
 
 const COURSE_DOWNLOADED = 0xff
 const CYCLE = Enum.of({ start: 1, pause: 2, resume: 3 })
@@ -165,11 +165,8 @@ const SOFTENER_TANK_USE_OFFSET = 48
 
 const NOZZLE_CLEAN_OFFSET = 47
 const NOZZLE_CLEAN_MASK = 0x60
-// The standby screen's clock, shown while the washer is off. The clock is a ThinQ UP feature (content WM-8 in
-// the washer's 0x86 content list); the setting can be switched on without it installed, and the screen
-// then shows --:--.
-const CURRENT_TIME_DISPLAY_OFFSET = 47
-const CURRENT_TIME_DISPLAY_MASK = 0x80
+const CLOCK_DISPLAY_OFFSET = 47
+const CLOCK_DISPLAY_MASK = 0x80
 
 const OPT1_OFFSET = 34
 const OPT1_COLD_WASH = 0x04
@@ -371,6 +368,7 @@ const RECORD_PROPERTIES = [
     { prop: 0x4c, key: 'cycle_optimization', offset: 40, mask: 0x08 },
     { prop: 0x56, key: 'quick_load_sense', offset: 50, mask: 0x04 },
     { prop: 0x51, key: 'splash_screen', offset: 46 },
+    { prop: PROP_CLOCK_DISPLAY, key: 'clock_display', offset: CLOCK_DISPLAY_OFFSET, mask: CLOCK_DISPLAY_MASK },
 ] as const
 
 function recordValue(rec: Buffer, field: (typeof RECORD_PROPERTIES)[number]): number {
@@ -798,12 +796,15 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:scale',
                         entity_category: 'config',
                     },
-                    current_time_display: {
+                    clock_display: {
                         platform: 'switch',
-                        unique_id: '$deviceid-current_time_display',
-                        state_topic: '$this/current_time_display',
-                        command_topic: '$this/current_time_display/set',
-                        name: 'Clock on standby',
+                        device_class: 'switch',
+                        unique_id: '$deviceid-clock_display',
+                        state_topic: '$this/clock_display',
+                        command_topic: '$this/clock_display/set',
+                        retain: false,
+                        optimistic: false,
+                        name: 'Clock display',
                         icon: 'mdi:clock-outline',
                         entity_category: 'config',
                     },
@@ -1098,13 +1099,13 @@ export default class Device extends AABBDevice {
                 minutes % RESERVE_TIME_STEP === 0
             )
                 this.writeBundle('reserve_time', minutes)
-        } else if (prop === 'cycle_optimization' || prop === 'quick_load_sense' || prop === 'current_time_display') {
+        } else if (prop === 'cycle_optimization' || prop === 'quick_load_sense' || prop === 'clock_display') {
             if (value !== 'ON' && value !== 'OFF') return
             const p =
-                prop === 'quick_load_sense'
-                    ? PROP_QUICK_LOAD_SENSE
-                    : prop === 'current_time_display'
-                      ? PROP_CURRENT_TIME_DISPLAY
+                prop === 'clock_display'
+                    ? PROP_CLOCK_DISPLAY
+                    : prop === 'quick_load_sense'
+                      ? PROP_QUICK_LOAD_SENSE
                       : PROP_CYCLE_OPTIMIZATION
             this.writeProps(p, value === 'ON' ? 1 : 0)
         } else if (prop === 'remote_maintain') {
@@ -1390,11 +1391,8 @@ export default class Device extends AABBDevice {
         this.publishProperty('remote_start', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_START) !== 0))
         this.publishProperty('drawer', (rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) !== 0 ? 'OFF' : 'ON')
         this.publishProperty('quick_load_sense', onOff((rec[OPT7_OFFSET] & OPT7_QUICK_LOAD_SENSE) !== 0))
+        this.publishProperty('clock_display', onOff((rec[CLOCK_DISPLAY_OFFSET] & CLOCK_DISPLAY_MASK) !== 0))
         this.publishProperty('splash_screen', SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]))
-        this.publishProperty(
-            'current_time_display',
-            onOff((rec[CURRENT_TIME_DISPLAY_OFFSET] & CURRENT_TIME_DISPLAY_MASK) !== 0),
-        )
         this.publishingRecord = false
     }
 }

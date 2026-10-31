@@ -62,7 +62,8 @@ const PROP_BUZZER = 0x13
 const PROP_CYCLE_OPTIMIZATION = 0x4c // switching it on moves the course to AI Dry
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_KEEP_FRESH = 0x57
-const PROP_CURRENT_TIME_DISPLAY = 0x58 // modelJSON currentTimeDisplay, as on FAFXU22007
+// Assumed washer-compatible setter; dryer clock status mapping is not established.
+const PROP_CLOCK_DISPLAY = 0x58
 
 const COURSE_DOWNLOADED = 0xff
 const CYCLE = Enum.of({ start: 1, pause: 2, resume: 3 })
@@ -510,15 +511,6 @@ export default class Device extends AABBDevice {
                         name: 'KeepFresh',
                         icon: 'mdi:weather-windy',
                     },
-                    current_time_display: {
-                        platform: 'switch',
-                        unique_id: '$deviceid-current_time_display',
-                        state_topic: '$this/current_time_display',
-                        command_topic: '$this/current_time_display/set',
-                        name: 'Clock on standby',
-                        icon: 'mdi:clock-outline',
-                        entity_category: 'config',
-                    },
                     cycle_optimization: {
                         platform: 'switch',
                         device_class: 'switch',
@@ -529,6 +521,26 @@ export default class Device extends AABBDevice {
                         optimistic: false,
                         name: 'Cycle optimization',
                         icon: 'mdi:auto-fix',
+                    },
+                    hide_clock: {
+                        platform: 'button',
+                        unique_id: '$deviceid-hide_clock',
+                        command_topic: '$this/hide_clock/set',
+                        retain: false,
+                        payload_press: '',
+                        name: 'Hide clock',
+                        icon: 'mdi:clock-remove-outline',
+                        entity_category: 'config',
+                    },
+                    show_clock: {
+                        platform: 'button',
+                        unique_id: '$deviceid-show_clock',
+                        command_topic: '$this/show_clock/set',
+                        retain: false,
+                        payload_press: '',
+                        name: 'Show clock',
+                        icon: 'mdi:clock-outline',
+                        entity_category: 'config',
                     },
                     splash_screen: {
                         platform: 'select',
@@ -837,11 +849,11 @@ export default class Device extends AABBDevice {
                 return
             if (this.course?.on && this.course.code !== COURSE_TIMED_DRY) return this.setProblem(DRY_TIME_REASON)
             this.writeBundle('dry_time', minutes)
-        } else if (prop === 'current_time_display') {
-            if (value === 'ON' || value === 'OFF') this.writeProps(PROP_CURRENT_TIME_DISPLAY, value === 'ON' ? 1 : 0)
         } else if (prop === 'cycle_optimization' || prop === 'keep_fresh') {
             if (value !== 'ON' && value !== 'OFF') return
             this.writeProps(prop === 'keep_fresh' ? PROP_KEEP_FRESH : PROP_CYCLE_OPTIMIZATION, value === 'ON' ? 1 : 0)
+        } else if (prop === 'hide_clock' || prop === 'show_clock') {
+            if (value === '') this.writeProps(PROP_CLOCK_DISPLAY, prop === 'show_clock' ? 1 : 0)
         } else if (prop === 'splash_screen') {
             const idx = SPLASH_SCREEN.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_SPLASH_SCREEN, idx)
@@ -996,7 +1008,7 @@ export default class Device extends AABBDevice {
             } else this.course = undefined
         }
         for (const [prop, value] of values) {
-            if (!accepted(prop)) continue
+            if (!accepted(prop) || prop === PROP_CLOCK_DISPLAY) continue
             const confirmed = actual?.get(prop) === value && before.get(prop) !== value
             this.accepted.set(prop, { value, expires: Date.now() + CONFIRMATION_WINDOW_MS, confirmed })
             if (confirmed && !this.pending.has(prop) && rec) this.publishConfirmed(prop, rec)
@@ -1176,6 +1188,5 @@ export default class Device extends AABBDevice {
             rec[SPLASH_SCREEN_OFFSET],
             SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]),
         )
-        this.publishProperty('current_time_display', onOff((rec[OPT5_OFFSET] & OPT5_CURRENT_TIME_DISPLAY) !== 0))
     }
 }
