@@ -1664,66 +1664,158 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
     })
 })
 
-describe('BDVG_FX0003_US assumed clock commands', () => {
-    test('Hide/Show config buttons send washer-compatible frames without clock state', () => {
-        for (const [key, expected] of [
-            ['hide_clock', 'aa0df0e5000201ff015800b2bb'],
-            ['show_clock', 'aa0df0e5000201ff015801bdbb'],
+describe('BDVG_FX0003_US confirmed clock display', () => {
+    const record = (shown: boolean) => {
+        const rec = Buffer.from(EB_CONNECT.subarray(15, 57))
+        rec[28] = (rec[28] & ~0x20) | (shown ? 0x20 : 0)
+        return rec
+    }
+
+    test('one nonoptimistic config switch replaces both command-only buttons', () => {
+        const { ha, dev } = makeDevice()
+        dev.publishConfig()
+        const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        const c = components.clock_display
+        assert.equal(c.platform, 'switch')
+        assert.equal(c.device_class, 'switch')
+        assert.equal(c.entity_category, 'config')
+        assert.equal(c.command_topic, '$this/clock_display/set')
+        assert.equal(c.state_topic, '$this/clock_display')
+        assert.equal(c.optimistic, false)
+        assert.equal(c.retain, false)
+        assert.equal(components.hide_clock, undefined)
+        assert.equal(components.show_clock, undefined)
+    })
+
+    test('record28 mask20 is isolated from KeepFresh and every other bit in EB and current EC', () => {
+        const { ha, thinq } = makeDevice()
+        for (let raw = 0; raw <= 0xff; raw++) {
+            const rec = record(false)
+            rec[28] = raw
+            const previous = Buffer.from(rec)
+            previous[28] ^= 0x30
+            for (const frame of [longFrame(0xeb, rec), longFrame(0xec, Buffer.concat([previous, rec]))]) {
+                thinq.emit('data', frame)
+                assert.equal(ha.devices[DEVICE_ID].properties.clock_display, raw & 0x20 ? 'ON' : 'OFF')
+                assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, raw & 0x10 ? 'ON' : 'OFF')
+            }
+        }
+    })
+
+    test('switch commands send validated frames and only changed accepted actual records publish feedback', () => {
+        for (const [value, expected] of [
+            ['OFF', 'aa0df0e5000201ff015800b2bb'],
+            ['ON', 'aa0df0e5000201ff015801bdbb'],
         ]) {
             const { ha, thinq, dev } = makeDevice()
-            dev.publishConfig()
-            const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-            assert.equal(components.clock_display, undefined)
-            const c = components[key]
-            assert.equal(c.platform, 'button')
-            assert.equal(c.entity_category, 'config')
-            assert.equal(c.command_topic, `$this/${key}/set`)
-            assert.equal(c.payload_press, '')
-            assert.equal(c.state_topic, undefined)
-            assert.equal(c.retain, false)
-            thinq.emit('data', EB_CONNECT)
-            const before = { ...ha.devices[DEVICE_ID].properties }
-            dev.setProperty(key, '')
+            thinq.emit('data', longFrame(0xeb, record(value !== 'ON')))
+            const before = ha.devices[DEVICE_ID].properties.clock_display
+            dev.setProperty('clock_display', value)
             assert.deepEqual(thinq.outbox, [buf(expected)])
-            thinq.emit('data', writeReply(thinq.outbox[0], Buffer.from(EB_CONNECT.subarray(15, 57))))
-            assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
-            assert.equal(ha.devices[DEVICE_ID].properties.clock_display, undefined)
+            assert.equal(ha.devices[DEVICE_ID].properties.clock_display, before)
+            thinq.emit('data', writeReply(thinq.outbox[0], record(value === 'ON')))
+            assert.equal(ha.devices[DEVICE_ID].properties.clock_display, value)
             dev.drop()
         }
     })
 
-    test('invalid button payloads and absent/Off context cannot send or power on', () => {
+    test('invalid payloads, removed buttons and absent/Off context cannot send or power on', () => {
         const { thinq, dev } = makeDevice()
-        dev.setProperty('hide_clock', '')
+        dev.setProperty('clock_display', 'OFF')
         thinq.emit('data', EB_CONNECT)
+        for (const value of ['', '0', '1', 'true', ' ', 'PRESS', 'on', 'off']) dev.setProperty('clock_display', value)
         for (const key of ['hide_clock', 'show_clock'])
-            for (const value of ['ON', 'OFF', '0', '1', 'true', ' ', 'PRESS']) dev.setProperty(key, value)
-        const off = Buffer.from(EB_CONNECT.subarray(15, 57))
+            for (const value of ['', 'ON', 'OFF']) dev.setProperty(key, value)
+        const off = record(true)
         off[13] = 0
         thinq.emit('data', longFrame(0xeb, off))
-        dev.setProperty('hide_clock', '')
+        dev.setProperty('clock_display', 'OFF')
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(thinq.sent, [])
     })
 
-    test('commands serialize and require exact E6 property matching, without accepted state', () => {
+    test('absent, stale and refused E6 records do not echo a requested value', () => {
+        for (const variant of ['absent', 'stale', 'refused']) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', longFrame(0xeb, record(true)))
+            dev.setProperty('clock_display', 'OFF')
+            thinq.emit(
+                'data',
+                writeReply(
+                    thinq.outbox[0],
+                    variant === 'absent' ? undefined : record(variant === 'stale'),
+                    new Map(variant === 'refused' ? [[0x58, 3]] : []),
+                ),
+            )
+            assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
+            dev.drop()
+        }
+    })
+
+    test('commands serialize, require exact property replies and suppress older feedback behind newer intent', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
-        dev.setProperty('hide_clock', '')
-        dev.setProperty('show_clock', '')
-        assert.equal(thinq.outbox.length, 1)
+        thinq.emit('data', longFrame(0xeb, record(true)))
+        dev.setProperty('clock_display', 'OFF')
+        dev.setProperty('clock_display', 'ON')
         const wrong = Buffer.from(thinq.outbox[0])
         wrong[9] = 0x51
-        thinq.emit('data', writeReply(wrong))
+        thinq.emit('data', writeReply(wrong, record(false)))
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', writeReply(thinq.outbox[0], undefined, new Map([[0x58, 3]])))
+        thinq.emit('data', writeReply(thinq.outbox[0], record(false)))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
         assert.equal(thinq.outbox.length, 2)
-        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /refused/)
-        thinq.emit('data', writeReply(thinq.outbox[1]))
-        assert.equal(ha.devices[DEVICE_ID].properties.problem, 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, undefined)
-        assert.equal(ha.devices[DEVICE_ID].properties.hide_clock, undefined)
-        assert.equal(ha.devices[DEVICE_ID].properties.show_clock, undefined)
+        thinq.emit('data', writeReply(thinq.outbox[1], record(true)))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
+        dev.drop()
+    })
+
+    test('actual feedback protects against stale status for 30 seconds only', (t) => {
+        t.mock.timers.enable({ apis: ['Date'] })
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', longFrame(0xeb, record(true)))
+        dev.setProperty('clock_display', 'OFF')
+        thinq.emit('data', writeReply(thinq.outbox[0], record(false)))
+        thinq.emit('data', longFrame(0xeb, record(true)))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+        t.mock.timers.tick(30_001)
+        thinq.emit('data', longFrame(0xeb, record(true)))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
+    })
+
+    test('matching passive status confirms a stale accepted record without requested echo', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', longFrame(0xeb, record(true)))
+        dev.setProperty('clock_display', 'OFF')
+        thinq.emit('data', writeReply(thinq.outbox[0], record(true)))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
+        thinq.emit('data', longFrame(0xeb, record(false)))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+        thinq.emit('data', longFrame(0xeb, record(true)))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+    })
+
+    test('course and Off boundaries clear feedback and prevent late old-context E6 restoration', () => {
+        for (const boundary of ['course', 'off']) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', longFrame(0xeb, record(true)))
+            dev.setProperty('clock_display', 'OFF')
+            thinq.emit('data', writeReply(thinq.outbox[0], record(false)))
+            const changed = record(true)
+            if (boundary === 'course') changed[5] = changed[5] === 7 ? 21 : 7
+            else changed[13] = 0
+            thinq.emit('data', longFrame(0xeb, changed))
+            assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
+            dev.drop()
+
+            const late = makeDevice()
+            late.thinq.emit('data', longFrame(0xeb, record(true)))
+            late.dev.setProperty('clock_display', 'OFF')
+            late.thinq.emit('data', longFrame(0xeb, changed))
+            late.thinq.emit('data', writeReply(late.thinq.outbox[0], record(false)))
+            assert.equal(late.ha.devices[DEVICE_ID].properties.clock_display, 'ON')
+            late.dev.drop()
+        }
     })
 
     test('timeout blocks queued clock command, late E6 and future commands', (ctx) => {
@@ -1734,15 +1826,15 @@ describe('BDVG_FX0003_US assumed clock commands', () => {
             return original(() => {}, 1_000_000).unref()
         }) as typeof setTimeout)
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
-        dev.setProperty('hide_clock', '')
-        dev.setProperty('show_clock', '')
+        thinq.emit('data', longFrame(0xeb, record(true)))
+        dev.setProperty('clock_display', 'OFF')
+        dev.setProperty('clock_display', 'ON')
         expire!()
-        thinq.emit('data', writeReply(thinq.outbox[0]))
-        thinq.emit('data', EB_CONNECT)
-        dev.setProperty('hide_clock', '')
+        thinq.emit('data', writeReply(thinq.outbox[0], record(false)))
+        thinq.emit('data', longFrame(0xeb, record(true)))
+        dev.setProperty('clock_display', 'OFF')
         assert.equal(thinq.outbox.length, 1)
-        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, undefined)
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /timed out/)
         dev.drop()
     })

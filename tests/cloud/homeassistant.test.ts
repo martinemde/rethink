@@ -17,20 +17,13 @@ test('MQTT routes explicit commands but never replays retained commands', () => 
             retain,
         } as IPublishPacket)
     }
-    for (const property of ['clock_display', 'hide_clock', 'show_clock']) {
-        for (const retain of [true, false])
-            Connection.prototype.received.call(
-                connection,
-                `rethink/device/${property}/set`,
-                Buffer.from(property === 'clock_display' ? 'OFF' : ''),
-                { retain } as IPublishPacket,
-            )
-    }
+    for (const retain of [true, false])
+        Connection.prototype.received.call(connection, 'rethink/device/clock_display/set', Buffer.from('OFF'), {
+            retain,
+        } as IPublishPacket)
     assert.deepEqual(received, [
         ['setProperty', 'device', 'temp', 'Warm'],
         ['setProperty', 'device', 'washer/temp', 'Cold'],
         ['setProperty', 'device', 'clock_display', 'OFF'],
-        ['setProperty', 'device', 'hide_clock', ''],
-        ['setProperty', 'device', 'show_clock', ''],
     ])
 })

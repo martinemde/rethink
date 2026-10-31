@@ -201,12 +201,59 @@ Changed constants: both models add `PROP_CLOCK_DISPLAY = 0x58`; washer adds
 `CLOCK_DISPLAY_OFFSET = 47` and `CLOCK_DISPLAY_MASK = 0x80`. Existing constants,
 framing/checksum algorithms, dependencies and lockfile are unchanged.
 
-Offline validation: **1152/1152 tests passed**, `mise exec -- npm run check`,
+Initial clock implementation validation (subsequently committed as `c2591eb`):
+**1152/1152 tests passed**, `mise exec -- npm run check`,
 `GIT_REVISION=$(git rev-parse HEAD) mise exec -- npm run build` and
 `git diff --check` passed. The build identifies the existing base HEAD `9f8e2b2`;
-these feature edits are uncommitted. Focused coverage includes invalid commands,
+the feature edits were uncommitted at that validation point. Focused coverage includes invalid commands,
 non-retained discovery/router delivery, checksum/length validation, mask isolation,
 matched/refused/wrong-property E6 replies, actual-versus-requested values,
 30-second expiry, matching status, queue coalescing, course/Off boundaries and
 fail-closed timeout. No deployment or physical command was performed by this
 implementation worker.
+
+
+## Dryer clock display confirmation (2026-10-31)
+
+This supersedes the earlier command-only dryer scope above. The user reported the
+Charizard / BDVG_FX0003_US controls working ("It seems to work fine") and
+reported a deliberate **off → on → off** test. Matching successful property
+`0x58` E6 replies at
+18:25:41.678, 18:25:52.543 and 18:25:55.639 UTC carried 42-byte records whose
+record28 values were **3 → 35 → 3**. Comparing the full records changes only
+record28 mask `0x20` apart from countdown/energy bytes. Existing KeepFresh
+record28 mask `0x10` does not overlap.
+
+Independent long-frame length and CRC16 validation found nearby EB record28=35
+before the commands (18:25:33.863 UTC). EB remained35 at18:25:54.062 and
+18:25:57.220, then became3 at18:26:11.961 and stayed3 through18:27:12.240.
+Thus EB corroborates the final Off after delayed reporting; it did not capture
+the brief first Off independently. Repeated identical reports are not additional
+physical confirmations. Private captures and identities stay outside Git.
+
+Dryer now exports one Configuration **Clock display** switch (`clock_display`),
+replacing `hide_clock` / `show_clock` buttons entirely. E5 property `0x58` and
+values0/1 remain unchanged; new constant `OPT5_CLOCK_DISPLAY = 0x20` uses existing
+`OPT5_OFFSET = 28`. The washer's record47 mask0x80 remains model-specific.
+Clock participates in dryer `recordValues`, normal reported-state publication
+and bounded accepted-record reconciliation, without the old property0x58 skip.
+An accepted reply only publishes clock feedback when its actual record matches
+the request and differs from the pre-write observed baseline; requested values
+alone never publish. Matching passive status can also confirm an accepted value.
+The existing30-second confirmation bound, powered-on command gate, pending-intent
+ownership, course/Off invalidation, retained-command rejection and3000ms
+fail-closed unanswered-write lockout are unchanged. No compatibility routes for
+the old buttons, automatic power-on, appliance queries, retries or ACKs were added.
+
+Offline regressions cover every record28 bit in EB/current-half EC, nonoptimistic
+switch discovery, removed buttons, exact commands/replies, refused/stale/absent
+records, newer pending intent, delayed matching status, stale protection/expiry,
+course/Off boundaries and timeout lockout. These generated fixture variants are
+not extra physical evidence. This worker sent no appliance commands and performed
+no commit, deployment or HA migration. Removing the two old button components
+requires parent-owned explicit tombstones from the actual discovery envelope;
+omission alone is not a migration.
+
+Offline validation: **1158/1158 tests passed**, TypeScript check, native build
+and `git diff --check` passed. No dependency or lockfile changes. The build
+identifies existing base HEAD `c2591eb`; these edits are uncommitted.

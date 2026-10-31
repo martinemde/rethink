@@ -62,7 +62,6 @@ const PROP_BUZZER = 0x13
 const PROP_CYCLE_OPTIMIZATION = 0x4c // switching it on moves the course to AI Dry
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_KEEP_FRESH = 0x57
-// Assumed washer-compatible setter; dryer clock status mapping is not established.
 const PROP_CLOCK_DISPLAY = 0x58
 
 const COURSE_DOWNLOADED = 0xff
@@ -152,7 +151,7 @@ const OPT5_KEEP_FRESH = 0x10
 // The standby screen's clock, as on FAFXU22007. The clock is a ThinQ UP feature: content DR-9 in the dryer's 0x86
 // content list (the modelJSON's upgradableNewBadge says WM-8, which this dryer refuses). Without it installed the
 // setting still switches, and the screen shows --:--.
-const OPT5_CURRENT_TIME_DISPLAY = 0x20
+const OPT5_CLOCK_DISPLAY = 0x20
 
 const STATE_POWEROFF = 0
 
@@ -522,23 +521,15 @@ export default class Device extends AABBDevice {
                         name: 'Cycle optimization',
                         icon: 'mdi:auto-fix',
                     },
-                    hide_clock: {
-                        platform: 'button',
-                        unique_id: '$deviceid-hide_clock',
-                        command_topic: '$this/hide_clock/set',
+                    clock_display: {
+                        platform: 'switch',
+                        device_class: 'switch',
+                        unique_id: '$deviceid-clock_display',
+                        state_topic: '$this/clock_display',
+                        command_topic: '$this/clock_display/set',
                         retain: false,
-                        payload_press: '',
-                        name: 'Hide clock',
-                        icon: 'mdi:clock-remove-outline',
-                        entity_category: 'config',
-                    },
-                    show_clock: {
-                        platform: 'button',
-                        unique_id: '$deviceid-show_clock',
-                        command_topic: '$this/show_clock/set',
-                        retain: false,
-                        payload_press: '',
-                        name: 'Show clock',
+                        optimistic: false,
+                        name: 'Clock display',
                         icon: 'mdi:clock-outline',
                         entity_category: 'config',
                     },
@@ -691,6 +682,7 @@ export default class Device extends AABBDevice {
             [PROP_BUZZER, rec[BUZZER_OFFSET]],
             [PROP_SPLASH_SCREEN, rec[SPLASH_SCREEN_OFFSET]],
             [PROP_KEEP_FRESH, bit(rec[OPT5_OFFSET], OPT5_KEEP_FRESH)],
+            [PROP_CLOCK_DISPLAY, bit(rec[OPT5_OFFSET], OPT5_CLOCK_DISPLAY)],
             [PROP_CYCLE_OPTIMIZATION, bit(rec[OPT4_OFFSET], OPT4_CYCLE_OPTIMIZATION)],
             ...BUNDLE.map(
                 ({ prop, key }) =>
@@ -852,8 +844,8 @@ export default class Device extends AABBDevice {
         } else if (prop === 'cycle_optimization' || prop === 'keep_fresh') {
             if (value !== 'ON' && value !== 'OFF') return
             this.writeProps(prop === 'keep_fresh' ? PROP_KEEP_FRESH : PROP_CYCLE_OPTIMIZATION, value === 'ON' ? 1 : 0)
-        } else if (prop === 'hide_clock' || prop === 'show_clock') {
-            if (value === '') this.writeProps(PROP_CLOCK_DISPLAY, prop === 'show_clock' ? 1 : 0)
+        } else if (prop === 'clock_display') {
+            if (value === 'ON' || value === 'OFF') this.writeProps(PROP_CLOCK_DISPLAY, value === 'ON' ? 1 : 0)
         } else if (prop === 'splash_screen') {
             const idx = SPLASH_SCREEN.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_SPLASH_SCREEN, idx)
@@ -1008,7 +1000,7 @@ export default class Device extends AABBDevice {
             } else this.course = undefined
         }
         for (const [prop, value] of values) {
-            if (!accepted(prop) || prop === PROP_CLOCK_DISPLAY) continue
+            if (!accepted(prop)) continue
             const confirmed = actual?.get(prop) === value && before.get(prop) !== value
             this.accepted.set(prop, { value, expires: Date.now() + CONFIRMATION_WINDOW_MS, confirmed })
             if (confirmed && !this.pending.has(prop) && rec) this.publishConfirmed(prop, rec)
@@ -1032,6 +1024,7 @@ export default class Device extends AABBDevice {
         } else if (prop === PROP_BUZZER) this.publishProperty('buzzer', BUZZER.map(raw))
         else if (prop === PROP_SPLASH_SCREEN) this.publishProperty('splash_screen', SPLASH_SCREEN.map(raw))
         else if (prop === PROP_KEEP_FRESH) this.publishProperty('keep_fresh', onOff(raw !== 0))
+        else if (prop === PROP_CLOCK_DISPLAY) this.publishProperty('clock_display', onOff(raw !== 0))
         else if (prop === PROP_CYCLE_OPTIMIZATION) this.publishProperty('cycle_optimization', onOff(raw !== 0))
     }
 
@@ -1181,6 +1174,12 @@ export default class Device extends AABBDevice {
             'keep_fresh',
             bit(rec[OPT5_OFFSET], OPT5_KEEP_FRESH),
             onOff((rec[OPT5_OFFSET] & OPT5_KEEP_FRESH) !== 0),
+        )
+        this.publishSetting(
+            PROP_CLOCK_DISPLAY,
+            'clock_display',
+            bit(rec[OPT5_OFFSET], OPT5_CLOCK_DISPLAY),
+            onOff((rec[OPT5_OFFSET] & OPT5_CLOCK_DISPLAY) !== 0),
         )
         this.publishSetting(
             PROP_SPLASH_SCREEN,
