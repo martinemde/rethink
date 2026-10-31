@@ -87,7 +87,7 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
             try {
                 if (packet.topic.indexOf('clip/') >= 0) {
                     const payload = JSON.parse(trimNull(Buffer.from(packet.payload)).toString('utf-8'))
-                    this.mqtt(packet.topic, payload, client as ClientWithExtra)
+                    this.mqtt(packet.topic, payload, client as ClientWithExtra, packet.retain === true)
                 }
             } catch (err) {
                 console.warn(err, packet.payload.toString('hex'))
@@ -97,7 +97,7 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
         broker.on('disconnect', this.disconnected.bind(this))
     }
 
-    mqtt(topic: string, payload: ClipMessage, client: ClientWithExtra) {
+    mqtt(topic: string, payload: ClipMessage, client: ClientWithExtra, retained = false) {
         // experiment: try to support devices which use other topic formats
         topic = topic.replace(/^.*\/clip/, 'clip')
 
@@ -107,6 +107,9 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
             }
 
             if (payload.cmd === 'device_packet' && payload.did === client.deployMsg?.did) {
+                // Retained application frames cannot establish a fresh appliance receipt.
+                // Provisioning and timesync keep their existing handling below.
+                if (retained) return
                 if (client.deviceObj) {
                     const buf = Buffer.from(payload.data as string, 'hex')
                     client.deviceObj.emit('data', buf)

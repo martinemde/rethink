@@ -48,6 +48,15 @@ function completion(): Buffer {
     return frame(3, payload)
 }
 
+function applianceProperties(properties: Record<string, string | number>) {
+    return Object.fromEntries(
+        Object.entries(properties).filter(
+            ([key]) =>
+                !['load_waiting', 'load_waiting/attributes', 'last_report_at', 'last_door_report_at'].includes(key),
+        ),
+    )
+}
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device('test-sidekick', META)
@@ -73,7 +82,7 @@ describe('MI2U7B passive exact-model support', () => {
             assert.equal(p.remaining_time, 'None')
         }
         thinq.emit('data', status(12, 85, 13))
-        assert.deepEqual(p, {
+        assert.deepEqual(applianceProperties(p), {
             course: 'TubClean',
             status: 'Rinsing',
             remaining_time: 13,
@@ -181,14 +190,14 @@ describe('MI2U7B passive exact-model support', () => {
         thinq.emit('data', status(14))
         thinq.emit('data', completion())
         ha.emit('discovery')
-        assert.equal(events().length, 1)
+        assert.equal(events().length, 2)
         for (const resetState of [0, 1]) {
             thinq.emit('data', status(resetState))
             thinq.emit('data', completion())
             thinq.emit('data', status(11))
             thinq.emit('data', completion())
         }
-        assert.equal(events().length, 3)
+        assert.equal(events().length, 4)
         assert.equal(p.cycle_finished, JSON.stringify({ event_type: 'finished' }))
         const restarted = makeDevice()
         restarted.thinq.emit('data', completion())
@@ -242,7 +251,7 @@ describe('MI2U7B passive exact-model support', () => {
         const { thinq, properties: p } = makeDevice()
         thinq.emit('data', valid)
         thinq.emit('data', drawer(1))
-        const before = { ...p }
+        const before = applianceProperties(p)
         for (const bad of invalid) {
             assert.equal(parseSideKickFrame(bad), undefined)
             thinq.emit('data', bad)
@@ -256,10 +265,10 @@ describe('MI2U7B passive exact-model support', () => {
         const badDrawer = drawer(0)
         badDrawer[20] ^= 1
         assert.equal(parseSideKickFrame(badDrawer), undefined)
-        assert.deepEqual(p, before)
+        assert.deepEqual(applianceProperties(p), before)
     })
 
-    test('startup preserves prior reports and exact-model bridge never writes, queries or ACKs', () => {
+    test('startup preserves prior reports and exact-model bridge only responds with ACKs', () => {
         const ha = new MockHAConnection()
         const thinq = new MockThinq2Device('test-sidekick', META)
         ha.publishProperty(thinq.id, 'status', 'previous state')
@@ -270,7 +279,8 @@ describe('MI2U7B passive exact-model support', () => {
         const dev = bridge.haDevices.get(thinq.id)!
         assert.ok(dev instanceof DUT)
         assert.equal(ha.devices[thinq.id].properties.status, 'previous state')
-        assert.equal(dev.publishCache.size, 0)
+        assert.equal(dev.publishCache.has('last_report_at'), false)
+        assert.equal(dev.publishCache.has('status'), false)
         dev.start()
         ha.emit('discovery')
         for (const prop of ['power', 'start', 'drawer', 'anything']) ha.emit('setProperty', thinq.id, prop, 'ON')
@@ -288,17 +298,26 @@ describe('MI2U7B passive exact-model support', () => {
             'cycle_finished',
             'drawer',
             'energy',
+            'last_door_report_at',
+            'last_report_at',
+            'load_removed',
+            'load_waiting',
             'remaining_time',
             'status',
             'total_time',
         ])
         for (const component of Object.values(dev.config!.components)) {
-            assert.ok(['sensor', 'binary_sensor', 'event'].includes(component.platform))
-            assert.ok(!Object.keys(component).some((key) => key.includes('command_topic')))
+            assert.ok(['sensor', 'binary_sensor', 'event', 'button'].includes(component.platform))
+            if (component.platform !== 'button')
+                assert.ok(!Object.keys(component).some((key) => key.includes('command_topic')))
         }
-        assert.deepEqual(thinq.sent, [])
+        assert.deepEqual(
+            thinq.sent.filter((message) => message.cmd !== 'ack'),
+            [],
+        )
         assert.deepEqual(thinq.outbox, [])
-        assert.deepEqual(sends, [])
+        assert.ok(sends.every((entry) => (entry as unknown[])[0] === 'ack'))
+        assert.equal(thinq.sent.length, 5)
         const unknown = new MockThinq2Device('unmatched', { ...META, modelId: 'MI2U7B_other' })
         bridge.newDevice(unknown)
         assert.equal(bridge.haDevices.has(unknown.id), false)

@@ -73,7 +73,10 @@ describe('FAFXU22007 verified local behavior', () => {
         thinq.emit('data', SPINNING)
         assert.equal(ha.devices[DEVICE_ID].properties.status, 'Spinning')
         assert.deepEqual(thinq.outbox, [])
-        assert.deepEqual(thinq.sent, [])
+        assert.deepEqual(
+            thinq.sent.filter((message) => message.cmd !== 'ack'),
+            [],
+        )
     })
 
     test('total time is byte16; remote start, lock and drawer have isolated masks', () => {
@@ -1112,6 +1115,15 @@ const APP_CHIME = [
     'aa0df0e5000201ff011304f3bb',
 ]
 
+function applianceProperties(properties: Record<string, string | number>) {
+    return Object.fromEntries(
+        Object.entries(properties).filter(
+            ([key]) =>
+                !['load_waiting', 'load_waiting/attributes', 'last_report_at', 'last_door_report_at'].includes(key),
+        ),
+    )
+}
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -1122,7 +1134,7 @@ function makeDevice() {
 function feed(frames: Buffer[]) {
     const { ha, thinq } = makeDevice()
     for (const f of frames) thinq.emit('data', f)
-    return ha.devices[DEVICE_ID].properties
+    return applianceProperties(ha.devices[DEVICE_ID].properties)
 }
 
 // Each frame on its own, one property read back from it.
@@ -1428,7 +1440,7 @@ describe('FAFXU22007', () => {
         const p = () => ha.devices[DEVICE_ID].properties
 
         thinq.emit('data', DRAWER_OPEN)
-        assert.deepEqual(p(), { drawer: 'ON' })
+        assert.deepEqual(applianceProperties(p()), { drawer: 'ON' })
         thinq.emit('data', DRAWER_SHUT)
         assert.equal(p().drawer, 'OFF')
         thinq.emit('data', DRAWER_RESENT)
@@ -1483,7 +1495,10 @@ describe('FAFXU22007', () => {
         const { thinq, dev } = makeDevice()
         dev.start()
         assert.deepEqual(thinq.outbox, [])
-        assert.deepEqual(thinq.sent, [])
+        assert.deepEqual(
+            thinq.sent.filter((message) => message.cmd !== 'ack'),
+            [],
+        )
     })
 
     test('setting the buzzer sends exactly what the ThinQ app sent', () => {
@@ -1721,8 +1736,8 @@ describe('FAFXU22007', () => {
         return thinq.sent.filter((m) => m.cmd === 'ack').map((m) => (m.data as string).toLowerCase())
     }
 
-    // Keep the captured cloud ACK fixtures as evidence, but the local model never sends ACKs.
-    test('captured frames do not trigger automatic acknowledgements', () => {
+    // Validated reports use the existing cloud ACK encoder without sending queries.
+    test('captured frames reproduce the cloud acknowledgements', () => {
         const cases: [Buffer, string][] = [
             [ACK_CONTENT_LIST, ACK_CONTENT_LIST_LG],
             [ACK_STATUS, ACK_STATUS_LG],
@@ -1733,15 +1748,15 @@ describe('FAFXU22007', () => {
         for (const [frame, ack] of cases) {
             const { thinq } = makeDevice()
             thinq.emit('data', frame)
-            assert.deepEqual(acks(thinq), [])
+            assert.deepEqual(acks(thinq), [ack])
             assert.deepEqual(thinq.outbox, [])
         }
     })
 
-    test('settings polls, heartbeats and appliance acks cause no acknowledgements', () => {
+    test('settings polls are ACKed but heartbeats and appliance ACKs are not', () => {
         const { thinq } = makeDevice()
         thinq.emit('data', SETTINGS_POLL)
-        assert.deepEqual(acks(thinq), [])
+        assert.deepEqual(acks(thinq), ['aa08f0007f0470bb'])
         thinq.resetRecorder()
         thinq.emit('data', HEARTBEAT)
         thinq.emit('data', buf('aa0a20000b00ba7e42bb'))
@@ -1961,7 +1976,10 @@ describe('FAFXU22007 clock display', () => {
         thinq.emit('data', POWER_OFF)
         dev.setProperty('clock_display', 'OFF')
         assert.deepEqual(thinq.outbox, [])
-        assert.deepEqual(thinq.sent, [])
+        assert.deepEqual(
+            thinq.sent.filter((message) => message.cmd !== 'ack'),
+            [],
+        )
     })
 
     test('rec47 clock mask is isolated from nozzle clean and splash screen', () => {
@@ -2160,7 +2178,7 @@ describe('FAFXU22007 reconciled controls', () => {
         thinq.emit('data', checksum(downloaded))
         dev.setProperty('start', '')
         assert.equal(thinq.outbox.length, 0)
-        assert.equal(thinq.sent.length, 0)
+        assert.equal(thinq.sent.filter((message) => message.cmd !== 'ack').length, 0)
     })
 
     test('rapid buzzer Low/Medium/High sends Low then latest High and never publishes Low', () => {

@@ -1,4 +1,6 @@
 import HADevice from './base'
+import { LaundryStateStore } from '../laundry-state'
+import { LaundrySupport, laundryComponents } from './laundry_support'
 import { Device as Thinq2Device } from '../thinq2/device'
 import { type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
@@ -404,6 +406,7 @@ function propertyIds(inner: Buffer): number[] | undefined {
 }
 
 export default class Device extends AABBDevice {
+    protected override readonly ackAfterProcessing = true
     protected override readonly strictWriteTracking = true
     private acceptedPower?: { value: boolean; until: number }
     private acceptedRemoteMaintain?: { value: boolean; until: number }
@@ -476,13 +479,15 @@ export default class Device extends AABBDevice {
         return true
     }
 
-    constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
-        super(HA, thinq, false)
+    constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata, laundry = new LaundryStateStore()) {
+        super(HA, thinq, true)
+        this.laundry = new LaundrySupport(this, laundry)
         thinq.on('sendData', this.trackGeneration)
         this.setConfig(
             allowExtendedType({
                 ...HADevice.config(meta, { name: 'LG Washer' }),
                 components: {
+                    ...laundryComponents('door'),
                     power: {
                         platform: 'switch',
                         device_class: 'switch',
@@ -859,12 +864,17 @@ export default class Device extends AABBDevice {
         )
     }
 
+    override publishConfig() {
+        super.publishConfig()
+        this.laundry.publish(true)
+    }
+
     start() {
+        this.laundry.publish()
         this.publishProblem()
     }
 
-    // Process-local: a finish notification at startup is never a new completion.
-    private completionState: 'unarmed' | 'armed' | 'completed' = 'unarmed'
+    private readonly laundry: LaundrySupport
 
     override processData(frame: Buffer) {
         if (frame.length < 4 || frame[0] !== 0xaa || frame[frame.length - 1] !== 0xbb) return
@@ -885,10 +895,11 @@ export default class Device extends AABBDevice {
                 return
             if (frame[12] === SINGLE_STATUS_FRAME_TYPE && frame[15] !== 0) return
         } else {
-            if (frame[1] !== frame.length) return
+            if (frame.length < 6 || frame[2] !== CLASS_BYTE || frame[1] !== frame.length) return
             const sum = frame.subarray(0, -2).reduce((a, b) => a + b, 0)
             if (((sum & 0xff) ^ 0x55) !== frame[frame.length - 2]) return
         }
+        this.laundry.receipt()
         super.processData(frame)
     }
 
@@ -1068,6 +1079,7 @@ export default class Device extends AABBDevice {
     }
 
     setProperty(prop: string, value: string) {
+        if (this.laundry.command(prop)) return
         if (this.writesBlocked) return
         if (prop !== 'power' && !this.context(false)) return
         const cycle = CYCLE.unmap(prop)
@@ -1224,8 +1236,7 @@ export default class Device extends AABBDevice {
                     buf.length === 13 + COMPLETION_INNER_LEN + 1 &&
                     buf.subarray(13, 19).equals(COMPLETION_PREFIX)
                 ) {
-                    if (this.completionState === 'armed') {
-                        this.completionState = 'completed'
+                    if (this.laundry.complete()) {
                         this.HA.publishProperty(this.id, 'cycle_finished', JSON.stringify({ event_type: 'finished' }), {
                             retain: false,
                         })
@@ -1281,6 +1292,7 @@ export default class Device extends AABBDevice {
         if (!buf.subarray(13, 18).equals(DOOR_EVENT_PREFIX)) return
         const door = buf[DOOR_EVENT_VALUE_OFFSET]
         if (door !== DOOR_OPEN && door !== DOOR_SHUT) return
+        this.laundry.door(door === DOOR_OPEN)
         this.publishProperty('door', door === DOOR_OPEN ? 'ON' : 'OFF')
     }
 
@@ -1328,8 +1340,7 @@ export default class Device extends AABBDevice {
         }
 
         const state = rec[STATE_OFFSET]
-        if (state === 0 || state === 1) this.completionState = 'unarmed'
-        else if (this.completionState === 'unarmed' && [11, 12, 14, 41].includes(state)) this.completionState = 'armed'
+        this.laundry.status(state, [11, 12, 14, 41])
         const isOff = state === STATE_POWEROFF
         const course = rec[COURSE_OFFSET]
 

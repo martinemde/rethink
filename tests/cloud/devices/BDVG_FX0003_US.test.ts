@@ -647,6 +647,15 @@ function finishFrame() {
     return longFrame(3, payload)
 }
 
+function applianceProperties(properties: Record<string, string | number>) {
+    return Object.fromEntries(
+        Object.entries(properties).filter(
+            ([key]) =>
+                !['load_waiting', 'load_waiting/attributes', 'last_report_at', 'last_door_report_at'].includes(key),
+        ),
+    )
+}
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -657,7 +666,7 @@ function makeDevice() {
 function feed(frames: Buffer[]) {
     const { ha, thinq } = makeDevice()
     for (const f of frames) thinq.emit('data', f)
-    return ha.devices[DEVICE_ID].properties
+    return applianceProperties(ha.devices[DEVICE_ID].properties)
 }
 
 function acks(thinq: MockThinq2Device) {
@@ -1096,11 +1105,11 @@ describe('BDVG_FX0003_US', () => {
 
     // The ThinQ cloud's own acks for these very frames, from the same capture: f0 00 <type> 04 [<seq16>]
     // under the `ack` command. The driver has to reproduce them byte for byte.
-    test('incoming frames never cause automatic ACKs or queries', () => {
+    test('validated incoming frames cause protocol ACKs without queries', () => {
         for (const frame of [EB_CONNECT, TIMED_DRY_30, DOOR_OPEN, CONTENT_LIST, REMOTE_START_ARMED, HELLO]) {
             const { thinq } = makeDevice()
             thinq.emit('data', frame)
-            assert.deepEqual(acks(thinq), [])
+            assert.equal(acks(thinq).length, 1)
             assert.deepEqual(thinq.outbox, [])
         }
     })
@@ -1338,7 +1347,7 @@ describe('BDVG_FX0003_US problem sensor', () => {
         dev.setProperty('power', 'ON')
         assert.equal(thinq.outbox.length, 1)
         thinq.emit('data', E6_CHIME_REFUSED)
-        assert.deepEqual(ha.devices[DEVICE_ID].properties, {})
+        assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), {})
         assert.equal(thinq.outbox.length, 2)
     })
 })
@@ -1417,14 +1426,14 @@ describe('BDVG_FX0003_US verified local enhancements', () => {
         ])
         thinq.emit('data', COOLING)
         thinq.emit('data', finishFrame())
-        assert.equal(events().length, 1)
+        assert.equal(events().length, 2)
         thinq.emit('data', EB_CONNECT) // Standby disarms and allows a new cycle
         thinq.emit('data', COOLING)
         thinq.emit('data', finishFrame())
-        assert.equal(events().length, 2)
+        assert.equal(events().length, 3)
         thinq.emit('data', OFF_AFTER_END)
         thinq.emit('data', finishFrame())
-        assert.equal(events().length, 2)
+        assert.equal(events().length, 3)
     })
 
     test('door prefix accepts both observed byte5 variants and rejects unrelated signatures/values', () => {
@@ -1453,7 +1462,7 @@ describe('BDVG_FX0003_US verified local enhancements', () => {
     test('strict full-frame validation rejects CRC, lengths and malformed completion', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', DRYING)
-        const before = { ...ha.devices[DEVICE_ID].properties }
+        const before = applianceProperties(ha.devices[DEVICE_ID].properties)
         const badCRC = Buffer.from(EB_CONNECT)
         badCRC[20] ^= 1
         const badLength = Buffer.from(EB_CONNECT)
@@ -1466,9 +1475,9 @@ describe('BDVG_FX0003_US verified local enhancements', () => {
         payload.set([3, 10, 2, 4, 3, 2])
         thinq.emit('data', longFrame(3, payload))
         thinq.emit('data', longFrame(3, Buffer.alloc(27)))
-        assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
+        assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), before)
         assert.deepEqual(thinq.outbox, [])
-        assert.deepEqual(acks(thinq), [])
+        assert.equal(acks(thinq).length, 3) // valid active report and two unknown, valid envelopes
     })
 
     test('discovery presents explicit-only controls and one completion event without imported diagnostics', () => {
@@ -1731,7 +1740,10 @@ describe('BDVG_FX0003_US confirmed clock display', () => {
         thinq.emit('data', longFrame(0xeb, off))
         dev.setProperty('clock_display', 'OFF')
         assert.deepEqual(thinq.outbox, [])
-        assert.deepEqual(thinq.sent, [])
+        assert.deepEqual(
+            thinq.sent.filter((message) => message.cmd !== 'ack'),
+            [],
+        )
     })
 
     test('absent, stale and refused E6 records do not echo a requested value', () => {

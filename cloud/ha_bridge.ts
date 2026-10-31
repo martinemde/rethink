@@ -54,9 +54,10 @@ import { type Connection } from './homeassistant'
 import HADevice from './devices/base'
 import { type Metadata } from './thinq'
 import { AnyDevice } from './devmgr'
+import { LaundryStateStore } from './laundry-state'
 
 type T1Factory = new (HA: Connection, thinq: T1Device, metadata: Metadata) => HADevice
-type T2Factory = new (HA: Connection, thinq: T2Device, metadata: Metadata) => HADevice
+type T2Factory = new (HA: Connection, thinq: T2Device, metadata: Metadata, laundry?: LaundryStateStore) => HADevice
 
 const t1deviceTypes: Record<string, T1Factory> = {
     WTDN3,
@@ -124,7 +125,10 @@ const t2deviceTypes: Record<string, T2Factory> = {
 
 class Bridge {
     haDevices = new Map<string, HADevice>()
-    constructor(readonly HA: Connection) {
+    constructor(
+        readonly HA: Connection,
+        readonly laundry = new LaundryStateStore(),
+    ) {
         HA.on('discovery', () => {
             this.haDevices.forEach((ha) => ha.publishConfig())
         })
@@ -146,7 +150,7 @@ class Bridge {
             if (devclass) hadevice = new devclass(this.HA, thinqdev, meta)
         } else if (thinqdev.platform === 'thinq2') {
             const devclass = t2deviceTypes[meta.modelId]
-            if (devclass) hadevice = new devclass(this.HA, thinqdev, meta)
+            if (devclass) hadevice = new devclass(this.HA, thinqdev, meta, this.laundry)
         }
 
         if (!hadevice) {
