@@ -1462,10 +1462,10 @@ describe('FAFXU22007', () => {
     test('a refused write changes nothing but the problem sensor', () => {
         const { ha, thinq, dev } = makeDevice()
         thinq.emit('data', EB_IDLE)
-        const before = { ...ha.devices[DEVICE_ID].properties }
+        const before = applianceProperties(ha.devices[DEVICE_ID].properties)
         dev.setProperty('buzzer', 'Off')
         thinq.emit('data', WRITE_REFUSED)
-        assert.deepEqual(ha.devices[DEVICE_ID].properties, {
+        assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), {
             ...before,
             problem: 'ON',
             problem_reason: 'Command refused (0x03)',
@@ -2094,9 +2094,9 @@ describe('FAFXU22007 clock display', () => {
             thinq.emit('data', EB_IDLE)
             dev.setProperty('clock_display', 'ON')
             thinq.emit('data', boundary)
-            const before = { ...ha.devices[DEVICE_ID].properties }
+            const before = applianceProperties(ha.devices[DEVICE_ID].properties)
             thinq.emit('data', reply([0x58], on))
-            assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
+            assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), before)
         }
     })
 })
@@ -2368,11 +2368,11 @@ describe('FAFXU22007 reconciled controls', () => {
             thinq.emit('data', EB_IDLE)
             dev.setProperty('buzzer', 'Low')
             thinq.emit('data', boundary)
-            const before = { ...ha.devices[DEVICE_ID].properties }
+            const before = applianceProperties(ha.devices[DEVICE_ID].properties)
             const low = currentRecord()
             low[29] = 1
             thinq.emit('data', reply([0x13], low))
-            assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
+            assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), before)
         }
     })
 
