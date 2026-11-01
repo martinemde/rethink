@@ -257,3 +257,33 @@ omission alone is not a migration.
 Offline validation: **1158/1158 tests passed**, TypeScript check, native build
 and `git diff --check` passed. No dependency or lockfile changes. The build
 identifies existing base HEAD `c2591eb`; these edits are uncommitted.
+
+
+## Integration observations, not laundry policy (2026-11-01)
+
+This section supersedes the earlier no-ACK scope. The washer, dryer and SideKick
+ACK strict-valid live frames **after** model processing. Retained appliance frames
+are rejected before model delivery. No polling, query, settings or startup
+commands were added.
+
+The integration publishes observations: status, door/drawer, notification-only
+`cycle_finished`, and diagnostic `last_report_at` / `last_door_report_at` receipt
+timestamps. Generic receipt time is captured before model processing, then published after
+interpretation and before ACK so HA can inspect the current status. Timestamp
+publication bypasses value dedup; startup/discovery do not
+fabricate receipts. Door/drawer value publishes before its receipt timestamp so
+HA can inspect the current value when a repeated receipt triggers policy.
+Receipt time is not a physical action time and cannot identify delayed old frames.
+
+Completion uses a process-local latch: active arms, completion consumes the latch,
+and Off/Standby disarms. A new active receipt after an accepted finish arms the
+next cycle even if its idle boundary was missed, preserving the accepted lifecycle.
+Repeated finish notifications without new active evidence remain consumed.
+Discovery/broker reconnect does not replay events. A recreated handler or process
+starts unarmed; restart-spanning completion dedup is deliberately not persisted.
+
+Waiting-load expiry, pickup/clear rules, alerts and manual dismissal belong to
+configurable Home Assistant policy. Native `load_waiting` and `load_removed` are
+withdrawn with platform-only discovery tombstones; other components are preserved.
+The historical `laundry-state.json` is no longer read or written. Leave any
+production copy untouched; removal is not a deployment requirement.

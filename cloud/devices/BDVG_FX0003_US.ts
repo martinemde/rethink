@@ -1,6 +1,5 @@
 import HADevice from './base'
-import { LaundryStateStore } from '../laundry-state'
-import { LaundrySupport, laundryComponents } from './laundry_support'
+import { ReceiptSupport, receiptComponents } from './receipt_support'
 import { Device as Thinq2Device } from '../thinq2/device'
 import { type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
@@ -282,14 +281,14 @@ const bit = (byte: number, mask: number) => ((byte & mask) !== 0 ? 1 : 0)
 
 export default class Device extends AABBDevice {
     protected override readonly ackAfterProcessing = true
-    constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata, laundry = new LaundryStateStore()) {
+    constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq, true)
-        this.laundry = new LaundrySupport(this, laundry)
+        this.receipts = new ReceiptSupport(this)
         this.setConfig(
             allowExtendedType({
                 ...HADevice.config(meta, { name: 'LG Dryer' }),
                 components: {
-                    ...laundryComponents('door'),
+                    ...receiptComponents('door'),
                     power: {
                         platform: 'switch',
                         device_class: 'switch',
@@ -595,17 +594,13 @@ export default class Device extends AABBDevice {
         )
     }
 
-    override publishConfig() {
-        super.publishConfig()
-        this.laundry.publish(true)
-    }
-
     start() {
-        this.laundry.publish()
         this.publishProblem()
     }
 
-    private readonly laundry: LaundrySupport
+    private readonly receipts: ReceiptSupport
+    // A finish retry at startup is not a new completion. No lifecycle is persisted.
+    private completionState: 'unarmed' | 'armed' | 'completed' = 'unarmed'
 
     // Why the last command from HA failed; cleared by the next one that goes through, or, for NO_COURSE_REASON,
     // by a record with a course.
@@ -820,7 +815,6 @@ export default class Device extends AABBDevice {
     }
 
     setProperty(prop: string, value: string) {
-        if (this.laundry.command(prop)) return
         const cycle = CYCLE.unmap(prop)
         if (cycle !== undefined) return this.writeProps(PROP_CYCLE, cycle)
         if (BUNDLE_SWITCHES.includes(prop as BundleKey)) {
@@ -888,8 +882,8 @@ export default class Device extends AABBDevice {
             const sum = frame.subarray(0, -2).reduce((a, b) => a + b, 0)
             if (((sum & 0xff) ^ 0x55) !== frame[frame.length - 2]) return
         }
-        this.laundry.receipt()
-        super.processData(frame)
+        const receivedAt = Date.now()
+        super.processData(frame, () => this.receipts.receipt(receivedAt))
     }
 
     processAABB(buf: Buffer) {
@@ -916,7 +910,8 @@ export default class Device extends AABBDevice {
                         .subarray(EVENT_PAYLOAD_OFFSET, EVENT_PAYLOAD_OFFSET + 6)
                         .equals(Buffer.from([0x03, 0x0a, 0x02, 0x04, 0x03, 0x03]))
                 ) {
-                    if (this.laundry.complete()) {
+                    if (this.completionState === 'armed') {
+                        this.completionState = 'completed'
                         this.HA.publishProperty(this.id, 'cycle_finished', JSON.stringify({ event_type: 'finished' }), {
                             retain: false,
                         })
@@ -1058,7 +1053,7 @@ export default class Device extends AABBDevice {
     // After a remote power change the dryer may send no record, only these events.
     private processEvent(payload: Buffer) {
         const on = payload[EVENT_POWER_OFFSET] !== 0
-        if (!on) this.laundry.status(0, [])
+        if (!on) this.completionState = 'unarmed'
         if (!on && this.course?.on) {
             this.boundary()
             this.course = { ...this.course, on: false }
@@ -1068,8 +1063,8 @@ export default class Device extends AABBDevice {
             payload.subarray(0, 5).equals(Buffer.from([EVENT_ID_DOOR, 0x0a, 0x02, 0x04, EVENT_ID_DOOR])) &&
             [0, DOOR_OPEN].includes(payload[EVENT_DOOR_OFFSET])
         ) {
-            this.laundry.door(payload[EVENT_DOOR_OFFSET] === DOOR_OPEN)
             this.publishProperty('door', onOff(payload[EVENT_DOOR_OFFSET] === DOOR_OPEN))
+            this.receipts.door()
         }
     }
 
@@ -1125,7 +1120,8 @@ export default class Device extends AABBDevice {
         for (const [prop, raw] of this.recordValues(rec)) this.reported.set(prop, raw)
         const state = rec[STATE_OFFSET]
         const isOff = state === STATE_POWEROFF
-        this.laundry.status(state, [7, 8])
+        if ([0, 1].includes(state)) this.completionState = 'unarmed'
+        else if ([7, 8].includes(state)) this.completionState = 'armed'
         this.takeInCourse(rec)
         this.bundle.set('steam', bit(rec[OPT2_OFFSET], OPT2_STEAM))
         this.bundle.set('damp_dry_signal', bit(rec[OPT1_OFFSET], OPT1_DAMP_DRY_SIGNAL))

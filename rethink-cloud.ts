@@ -14,7 +14,6 @@ import { DeviceAcceptor as T1Acceptor } from './cloud/thinq1/device'
 import { DeviceAcceptor as T2Acceptor } from './cloud/thinq2/device'
 import { Connection as HA_connection } from './cloud/homeassistant'
 import HA_bridge from './cloud/ha_bridge'
-import { LaundryStateStore } from './cloud/laundry-state'
 import { normalize as normalizeConfig, RawConfig } from './util/config'
 import { loadHassioConfig } from './util/hassio'
 import * as Management from './management'
@@ -149,8 +148,7 @@ function t2setup(manager: DeviceManager) {
 }
 
 // HA connector
-const laundry = new LaundryStateStore(resolve(process.env.RETHINK_DATA_DIR ?? process.cwd(), 'laundry-state.json'))
-const ha = new HA_bridge(new HA_connection(config.homeassistant), laundry)
+const ha = new HA_bridge(new HA_connection(config.homeassistant))
 const manager = new DeviceManager()
 manager.on('newDevice', (dev) => ha.newDevice(dev))
 

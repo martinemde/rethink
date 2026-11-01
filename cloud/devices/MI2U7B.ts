@@ -1,6 +1,5 @@
 import HADevice from './base'
-import { LaundryStateStore } from '../laundry-state'
-import { LaundrySupport, laundryComponents } from './laundry_support'
+import { ReceiptSupport, receiptComponents } from './receipt_support'
 import AABBDevice from './aabb_device'
 import crc16 from '@/util/crc16'
 import type { Device as Thinq2Device } from '../thinq2/device'
@@ -12,16 +11,18 @@ import { parseSideKickFrame } from './MI2U7B_status'
 // Exact-model reports and protocol ACKs only; no polls or appliance setting commands.
 export default class Device extends AABBDevice {
     protected override readonly ackAfterProcessing = true
-    private readonly laundry: LaundrySupport
+    private readonly receipts: ReceiptSupport
+    // A finish retry at startup is not a new completion. No lifecycle is persisted.
+    private completionState: 'unarmed' | 'armed' | 'completed' = 'unarmed'
 
-    constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata, laundry = new LaundryStateStore()) {
+    constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq, true)
-        this.laundry = new LaundrySupport(this, laundry)
+        this.receipts = new ReceiptSupport(this)
         this.setConfig(
             allowExtendedType({
                 ...HADevice.config(meta, { name: 'LG SideKick' }),
                 components: {
-                    ...laundryComponents('drawer'),
+                    ...receiptComponents('drawer'),
                     cycle_finished: {
                         platform: 'event',
                         unique_id: '$deviceid-cycle_finished',
@@ -97,9 +98,9 @@ export default class Device extends AABBDevice {
             crc16(frame.subarray(0, -3)) !== frame.readUInt16BE(frame.length - 3)
         )
             return
-        this.laundry.receipt()
+        const receivedAt = Date.now()
         this.processReport(frame)
-        super.processData(frame)
+        super.processData(frame, () => this.receipts.receipt(receivedAt))
     }
 
     override processAABB(_buf: Buffer) {}
@@ -108,15 +109,18 @@ export default class Device extends AABBDevice {
         const update = parseSideKickFrame(frame)
         if (!update) return
         if (update.kind === 'completion') {
-            if (!this.laundry.complete()) return
+            if (this.completionState !== 'armed') return
+            this.completionState = 'completed'
             this.HA.publishProperty(this.id, 'cycle_finished', JSON.stringify({ event_type: 'finished' }), {
                 retain: false,
             })
         } else if (update.kind === 'drawer') {
-            if (update.drawer !== undefined) this.laundry.door(update.drawer === 'ON')
             this.publishProperty('drawer', update.drawer)
+            if (update.drawer !== undefined) this.receipts.door()
         } else {
-            this.laundry.status(update.state_code, [11, 12, 14])
+            if ([0, 1].includes(update.state_code)) this.completionState = 'unarmed'
+            else if ([11, 12, 14].includes(update.state_code))
+                this.completionState = 'armed'
             this.publishProperty('status', update.status)
             this.publishProperty('total_time', update.total_time)
             this.publishProperty('course', update.course)
@@ -125,16 +129,5 @@ export default class Device extends AABBDevice {
         }
     }
 
-    override publishConfig() {
-        super.publishConfig()
-        this.laundry.publish(true)
-    }
-
-    override start() {
-        this.laundry.publish()
-    }
-
-    override setProperty(prop: string, _value: string) {
-        this.laundry.command(prop)
-    }
+    override setProperty(_prop: string, _value: string) {}
 }

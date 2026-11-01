@@ -1,6 +1,5 @@
 import HADevice from './base'
-import { LaundryStateStore } from '../laundry-state'
-import { LaundrySupport, laundryComponents } from './laundry_support'
+import { ReceiptSupport, receiptComponents } from './receipt_support'
 import { Device as Thinq2Device } from '../thinq2/device'
 import { type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
@@ -479,15 +478,15 @@ export default class Device extends AABBDevice {
         return true
     }
 
-    constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata, laundry = new LaundryStateStore()) {
+    constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq, true)
-        this.laundry = new LaundrySupport(this, laundry)
+        this.receipts = new ReceiptSupport(this)
         thinq.on('sendData', this.trackGeneration)
         this.setConfig(
             allowExtendedType({
                 ...HADevice.config(meta, { name: 'LG Washer' }),
                 components: {
-                    ...laundryComponents('door'),
+                    ...receiptComponents('door'),
                     power: {
                         platform: 'switch',
                         device_class: 'switch',
@@ -864,17 +863,13 @@ export default class Device extends AABBDevice {
         )
     }
 
-    override publishConfig() {
-        super.publishConfig()
-        this.laundry.publish(true)
-    }
-
     start() {
-        this.laundry.publish()
         this.publishProblem()
     }
 
-    private readonly laundry: LaundrySupport
+    private readonly receipts: ReceiptSupport
+    // A finish retry at startup is not a new completion. No lifecycle is persisted.
+    private completionState: 'unarmed' | 'armed' | 'completed' = 'unarmed'
 
     override processData(frame: Buffer) {
         if (frame.length < 4 || frame[0] !== 0xaa || frame[frame.length - 1] !== 0xbb) return
@@ -899,8 +894,8 @@ export default class Device extends AABBDevice {
             const sum = frame.subarray(0, -2).reduce((a, b) => a + b, 0)
             if (((sum & 0xff) ^ 0x55) !== frame[frame.length - 2]) return
         }
-        this.laundry.receipt()
-        super.processData(frame)
+        const receivedAt = Date.now()
+        super.processData(frame, () => this.receipts.receipt(receivedAt))
     }
 
     // BUNDLE values from the last record, plus writes not yet reflected in one
@@ -1079,7 +1074,6 @@ export default class Device extends AABBDevice {
     }
 
     setProperty(prop: string, value: string) {
-        if (this.laundry.command(prop)) return
         if (this.writesBlocked) return
         if (prop !== 'power' && !this.context(false)) return
         const cycle = CYCLE.unmap(prop)
@@ -1236,7 +1230,8 @@ export default class Device extends AABBDevice {
                     buf.length === 13 + COMPLETION_INNER_LEN + 1 &&
                     buf.subarray(13, 19).equals(COMPLETION_PREFIX)
                 ) {
-                    if (this.laundry.complete()) {
+                    if (this.completionState === 'armed') {
+                        this.completionState = 'completed'
                         this.HA.publishProperty(this.id, 'cycle_finished', JSON.stringify({ event_type: 'finished' }), {
                             retain: false,
                         })
@@ -1292,8 +1287,8 @@ export default class Device extends AABBDevice {
         if (!buf.subarray(13, 18).equals(DOOR_EVENT_PREFIX)) return
         const door = buf[DOOR_EVENT_VALUE_OFFSET]
         if (door !== DOOR_OPEN && door !== DOOR_SHUT) return
-        this.laundry.door(door === DOOR_OPEN)
         this.publishProperty('door', door === DOOR_OPEN ? 'ON' : 'OFF')
+        this.receipts.door()
     }
 
     private processDrawer(buf: Buffer) {
@@ -1340,7 +1335,8 @@ export default class Device extends AABBDevice {
         }
 
         const state = rec[STATE_OFFSET]
-        this.laundry.status(state, [11, 12, 14, 41])
+        if ([0, 1].includes(state)) this.completionState = 'unarmed'
+        else if ([11, 12, 14, 41].includes(state)) this.completionState = 'armed'
         const isOff = state === STATE_POWEROFF
         const course = rec[COURSE_OFFSET]
 

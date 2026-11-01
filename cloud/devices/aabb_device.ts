@@ -157,14 +157,15 @@ export default class AABBDevice extends HADevice {
         }, AABBDevice.WRITE_TIMEOUT_MS).unref()
     }
 
-    // Durable report handlers must finish before acknowledging delivery.
+    // Opt-in handlers finish interpreting validated reports before acknowledging delivery.
     protected readonly ackAfterProcessing: boolean = false
 
-    processData(buf: Buffer) {
+    processData(buf: Buffer, afterProcessing?: () => void) {
         if (buf.length >= 4 && buf[0] == 0xaa && buf[buf.length - 1] == 0xbb) {
             const inner = buf.subarray(2, buf.length - 2)
             if (this.autoAck && !this.ackAfterProcessing) this.ack(inner, buf[1] === LONG_FRAME)
             this.processAABB(inner)
+            afterProcessing?.()
             if (this.autoAck && this.ackAfterProcessing) this.ack(inner, buf[1] === LONG_FRAME)
             this.nextWrite()
         }

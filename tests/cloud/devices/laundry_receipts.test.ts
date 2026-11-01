@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import Washer from '@/cloud/devices/FAFXU22007'
 import Dryer from '@/cloud/devices/BDVG_FX0003_US'
 import SideKick from '@/cloud/devices/MI2U7B'
-import { LaundryStateStore } from '@/cloud/laundry-state'
 import { MockHAConnection, MockThinq2Device } from '@/tests/helpers/mocks'
 import crc16 from '@/util/crc16'
 
@@ -60,13 +59,13 @@ const cases = [
 ] as const
 
 for (const c of cases)
-    describe(`${c.modelId} live receipts and shared laundry state`, () => {
-        function setup(store = new LaundryStateStore()) {
+    describe(`${c.modelId} live receipts and completion events`, () => {
+        function setup() {
             const ha = new MockHAConnection()
             const meta = { modelId: c.modelId, modelName: 'Test', deviceType: '201' }
             const thinq = new MockThinq2Device(c.modelId, meta)
-            const dev = new c.Device(ha.asConnection(), thinq, meta, store)
-            return { ha, thinq, dev, store, p: ha.devices[thinq.id].properties }
+            const dev = new c.Device(ha.asConnection(), thinq, meta)
+            return { ha, thinq, dev, p: ha.devices[thinq.id].properties }
         }
         function active() {
             const payload = Buffer.alloc(c.recordLength)
@@ -85,7 +84,7 @@ for (const c of cases)
             const { ha, thinq, dev, p } = setup()
             dev.start()
             dev.publishConfig()
-            assert.equal(p.load_waiting, 'None')
+            assert.equal(p.load_waiting, undefined)
             assert.equal(p.last_report_at, undefined)
             assert.equal(p.last_door_report_at, undefined)
             assert.deepEqual(thinq.sent, [])
@@ -113,27 +112,54 @@ for (const c of cases)
             assert.equal(ha.devices[thinq.id].config!.components.last_report_at.platform, 'sensor')
         })
 
-        test('persistence failure leaves completion unacknowledged for retry', (t) => {
-            const { thinq, store } = setup()
-            thinq.emit('data', active())
-            thinq.resetRecorder()
-            const failure = t.mock.method(store, 'complete', () => {
-                throw new Error('disk unavailable')
+        test('processing failure leaves frame unacknowledged', (t) => {
+            const { ha, thinq } = setup()
+            const publish = ha.publishProperty.bind(ha)
+            t.mock.method(ha, 'publishProperty', (id: string, key: string, value: string | number | undefined) => {
+                if (key === 'status') throw new Error('publish failed')
+                publish(id, key, value)
             })
-            assert.throws(() => thinq.emit('data', finish()), /disk unavailable/)
+            assert.throws(() => thinq.emit('data', active()), /publish failed/)
             assert.deepEqual(thinq.sent, [])
             assert.deepEqual(thinq.outbox, [])
-            assert.equal(store.get(thinq.id).armed, true)
-            failure.mock.restore()
-            thinq.emit('data', finish())
-            assert.equal(store.get(thinq.id).waiting, true)
-            assert.equal(thinq.sent.length, 1)
         })
 
-        test('fresh repeated open receipts clear waiting before value-cache dedup, not a fabricated edge', (t) => {
+        test('ACK follows completion publication and does not replay events on discovery', (t) => {
+            const { ha, thinq, dev } = setup()
+            thinq.emit('data', active())
+            const order: string[] = []
+            const publish = ha.publishProperty.bind(ha)
+            t.mock.method(ha, 'publishProperty', (id: string, key: string, value: string | number | undefined) => {
+                order.push(key)
+                publish(id, key, value)
+            })
+            const send = thinq.send_ack.bind(thinq)
+            t.mock.method(thinq, 'send_ack', (data: Buffer) => {
+                order.push('ack')
+                send(data)
+            })
+            const idle = Buffer.alloc(c.recordLength)
+            idle[c.stateOffset] = 1
+            thinq.emit('data', frame(c.classByte, 0xeb, idle))
+            order.length = 0
+            thinq.emit('data', active())
+            assert.ok(order.indexOf('status') >= 0)
+            assert.ok(order.indexOf('status') < order.indexOf('last_report_at'))
+            assert.ok(order.indexOf('last_report_at') < order.indexOf('ack'))
+            order.length = 0
+            thinq.emit('data', finish())
+            assert.ok(order.indexOf('cycle_finished') >= 0)
+            assert.ok(order.indexOf('cycle_finished') < order.indexOf('last_report_at'))
+            assert.ok(order.indexOf('last_report_at') < order.indexOf('ack'))
+            order.length = 0
+            dev.publishConfig()
+            assert.equal(order.includes('cycle_finished'), false)
+        })
+
+        test('fresh repeated door receipts bypass value dedup without changing lifecycle', (t) => {
             let now = 1000
             t.mock.method(Date, 'now', () => now)
-            const { ha, thinq, dev, p, store } = setup()
+            const { ha, thinq, dev, p } = setup()
             const calls: string[] = []
             const original = ha.publishProperty.bind(ha)
             t.mock.method(ha, 'publishProperty', (id: string, key: string, value: string | number | undefined) => {
@@ -143,51 +169,47 @@ for (const c of cases)
             const open = frame(c.classByte, 3, c.door)
             thinq.emit('data', open)
             assert.equal(p[c.doorKey], 'ON')
-            thinq.emit('data', finish()) // unarmed startup retry is not a completion
-            assert.equal(store.get(thinq.id).waiting, null)
+            assert.ok(calls.indexOf(c.doorKey) < calls.indexOf('last_door_report_at'))
+            thinq.emit('data', finish()) // an unarmed startup retry is not a completion
+            assert.equal(p.cycle_finished, undefined)
             now++
             thinq.emit('data', active())
             now++
             calls.length = 0
             thinq.emit('data', finish())
-            assert.equal(p.load_waiting, 'ON')
-            assert.ok(calls.indexOf('load_waiting_attributes') < calls.indexOf('load_waiting'))
-            const attributes = JSON.parse(p['load_waiting_attributes'] as string)
-            assert.equal(attributes.finished_ts, new Date(now).toISOString())
-            const finished = store.get(thinq.id).completionReceivedAt
-            // Simulate loss of retained broker state without losing the integration's cache.
-            delete p.load_waiting
-            delete p['load_waiting_attributes']
+            assert.equal(calls.filter((key) => key === 'cycle_finished').length, 1)
+            thinq.emit('data', finish())
+            assert.equal(calls.filter((key) => key === 'cycle_finished').length, 1)
+            // A new active receipt arms the next completion even if idle was missed.
+            thinq.emit('data', active())
+            thinq.emit('data', finish())
+            assert.equal(calls.filter((key) => key === 'cycle_finished').length, 2)
             calls.length = 0
             const sends = thinq.sent.length
+            const receipt = p.last_report_at
+            dev.start()
             dev.publishConfig()
-            assert.equal(p.load_waiting, 'ON')
-            assert.equal(JSON.parse(p['load_waiting_attributes'] as string).finished_ts, attributes.finished_ts)
-            assert.ok(calls.indexOf('load_waiting_attributes') < calls.indexOf('load_waiting'))
+            assert.equal(p.last_report_at, receipt)
             assert.equal(calls.includes('last_report_at'), false)
             assert.equal(calls.includes('last_door_report_at'), false)
             assert.equal(calls.includes('cycle_finished'), false)
             assert.equal(thinq.sent.length, sends)
-            thinq.emit('data', finish())
-            assert.equal(store.get(thinq.id).completionReceivedAt, finished)
-            // Same physical value and even same sequence: this is a later live receipt, not a new edge.
             now++
             calls.length = 0
             thinq.emit('data', open)
-            assert.equal(p.load_waiting, 'OFF')
+            assert.equal(p.last_report_at, new Date(now).toISOString())
             assert.equal(p.last_door_report_at, new Date(now).toISOString())
             assert.equal(calls.filter((key) => key === c.doorKey).length, 0)
-            const next = setup(store)
+            const next = setup()
             next.dev.start()
-            assert.equal(next.p.load_waiting, 'OFF')
-            assert.equal(next.p.last_report_at, undefined)
             next.thinq.emit('data', finish())
-            assert.equal(next.p.load_waiting, 'OFF')
             assert.equal(next.p.cycle_finished, undefined)
-            const sentBeforeCommand = thinq.sent.length
-            dev.setProperty('load_removed', '')
-            assert.equal(p.load_waiting, 'OFF')
-            assert.equal(thinq.sent.length, sentBeforeCommand)
+            assert.equal(next.p.load_waiting, undefined)
+            assert.equal(p.load_waiting, undefined)
+            assert.equal(p.load_waiting_attributes, undefined)
+            const components = ha.devices[thinq.id].config!.components
+            assert.deepEqual(JSON.parse(JSON.stringify(components.load_waiting)), { platform: 'binary_sensor' })
+            assert.deepEqual(JSON.parse(JSON.stringify(components.load_removed)), { platform: 'button' })
             assert.deepEqual(thinq.outbox, [])
         })
     })
