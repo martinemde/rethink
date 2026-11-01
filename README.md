@@ -27,16 +27,19 @@ the second one is the model it is sold as.
 
 #### Fridges
 
-| ThinQ model     | Appliance                                                  | Support                                                                                     |
-| --------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| 2REF11EIDA\_\_4 | LF28H8330S, Standard-Depth 4-Door French Door Refrigerator | 🫤 preliminary support                                                                      |
-| 2REF11EIDG\_\_4 | LRFXC2606S, 3-Door French Door Refrigerator                | 👍 setpoints, Ice Plus, Sabbath, Smart Learner, filters, water use                          |
-| 2RES1VE61NFA2   | GSJV70PZTE, Side by Side Refrigerator                      | 🫤 preliminary support                                                                      |
-| 2REB1GLVB1\_\_2 | GSB470BASZ, American Style Side by Side Refrigerator       | 🫤 preliminary support                                                                      |
-| 2RES1VE600FWC   | GA-B509CMUM                                                | 🫤 preliminary support                                                                      |
-| 2REF11EBIVPC4   | (model name unknown)                                       | 🫤 preliminary support: fridge/freezer temperature, door open, express freeze, Shabbat mode |
-| 2REFT1DIC4P_U   | GF-V700BSLC, InstaView Craft Ice French Door Refrigerator  | 🫤 preliminary support                                                                      |
-| 2REFTBDII4P_U   | GF-L500MBL                                                 | 🫤 preliminary support                                                                      |
+| ThinQ model     | Appliance                                                    | Support                                                                                     |
+| --------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| 2REF11EIDA\_\_4 | LF28H8330S, Standard-Depth 4-Door French Door Refrigerator   | 🫤 preliminary support                                                                      |
+| 2REF11EIDG\_\_4 | LRFXC2606S, 3-Door French Door Refrigerator                  | 👍 setpoints, Ice Plus, Sabbath, Smart Learner, filters, water use                          |
+| 2RES1VE61NFA2   | GSJV70PZTE, Side by Side Refrigerator                        | 🫤 preliminary support                                                                      |
+| 2REB1GLVB1\_\_2 | GSB470BASZ, American Style Side by Side Refrigerator         | 🫤 preliminary support                                                                      |
+| 2REBGLUB_2P\_\_ | GBBSJ2CCEP, Bottom Freezer Refrigerator                      | 👍 setpoints, modes, door usage, energy                                                     |
+| 2RES1VE600FWC   | GA-B509CMUM                                                  | 🫤 preliminary support                                                                      |
+| 2RES1VE61NFWA   | GSX961MCCZ, InstaView Door-in-Door Side by Side Refrigerator | 🫤 preliminary support                                                                      |
+| 2REF11EBIVPC4   | (model name unknown)                                         | 🫤 preliminary support: fridge/freezer temperature, door open, express freeze, Shabbat mode |
+| 2REFT1DIC4P_U   | GF-V700BSLC, InstaView Craft Ice French Door Refrigerator    | 🫤 preliminary support                                                                      |
+| 2REFTBDII4P_U   | GF-L500MBL                                                   | 🫤 preliminary support                                                                      |
+| 2REF11EII\_\_M2 | LMXS28626S, 4-Door French Door Refrigerator                  | 🫤 preliminary support                                                                      |
 
 #### Washing machines
 
@@ -47,6 +50,7 @@ the second one is the model it is sold as.
 | F_V7_Y\_\_\_W.B_2QEUK                            | F4WV508S2E, Front-Loading Washing Machine        | 🫤 preliminary support       |
 | F_V8_Y\_\_\_W.B_2QEUK                            | F4WV709P1E, Front-Loading Washing Machine        | 🫤 preliminary support       |
 | F_V\_\_Y\_\_\_W.B_2QEUK                          | TW4V9RW9W                                        | 🫤 preliminary support       |
+| F_V\_\_Y\_\_\_W.B\_\_QEUK                        | WV9-1609B, Front-Load Washing Machine            | 🫤 preliminary support       |
 | F_VB_Y\_\_\_W.B_2QEUK                            | F4WV710ATR, Front-Loading Washing Machine        | 🫤 preliminary support       |
 | F_C\_\_Y\_\_\_W.A\_\_QEUK                        | F4WV709P1, Front-Loading Washing Machine         | 👍 mostly working            |
 | F_V7_Y\_\_\_W.B\_\_QEUK                          | F2V5PS0W, Front-Load Washing Machine             | 👍 mostly working            |
@@ -75,6 +79,7 @@ the second one is the model it is sold as.
 | BDVG_FX0003_US       | DLEX6700B, Electric Dryer            | 👍 mostly working            |
 | RC90U2_WW            | RC9DN9029 Heat Pump Dryer            | 🫤 preliminary support       |
 | RC90V9_WW            | RC91V9EV2Q, Heat Pump Dryer          | 🫤 preliminary support       |
+| RC90V9_AUS           | DVH9-09B, Heat Pump Dryer            | 🫤 preliminary support       |
 
 #### WashTowers (combined washer+dryer)
 
@@ -89,6 +94,7 @@ the second one is the model it is sold as.
 | H11         | DUE2BG.AKOR Dishwasher                            | 👍 mostly working                 |
 | N17         | LDNPQ445S                                         | 👍 mostly working                 |
 | D0211       | DB365TXS / DBC435TSL.AASQEIS, Built-in Dishwasher | 🫤 preliminary support, read-only |
+| D2211       | XD3A25MB, Dishwasher                              | 🫤 preliminary support, read-only |
 | D30         | LDT54788D                                         | 👍 mostly working, read-only      |
 
 #### Dehumidifiers
