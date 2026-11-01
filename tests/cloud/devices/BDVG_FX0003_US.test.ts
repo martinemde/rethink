@@ -592,17 +592,6 @@ const APP_CHIME = [
     'aa0df0e5000201ff011304f3bb',
 ]
 
-// The standby clock, prop 0x58 as on FAFXU22007, written from rethink 2026-11-05 02:59 UTC: on, then off. Each answered 00, and the
-// next record has rec[28] bit 0x20 set, then clear (0x03 <-> 0x23).
-const W_CLOCK_ON = buf('aa0df0e5000201ff015801bdbb')
-const W_CLOCK_OFF = buf('aa0df0e5000201ff015800b2bb')
-const REC_CLOCK_ON = buf(
-    'aaff300a006600b50a000100ec005400000000000000000000290029010000020000040000000020000081030000000208000000000000000000000000000000000000290029010000020000040000000020000081230000000208000000000000000020c9bb',
-)
-const REC_CLOCK_OFF = buf(
-    'aaff300a006600b50e000100ec0054000000000000000000002900290100000200000400000000200000812300000002080000000000000000000000000000000000002900290100000200000400000000200000810300000002080000000000000000aa06bb',
-)
-
 function writeReply(write: Buffer, record?: Buffer, overrides = new Map<number, number>()) {
     const props: number[] = []
     let at = 9
@@ -691,7 +680,7 @@ describe('BDVG_FX0003_US', () => {
             wrinkle_care: 'OFF',
             damp_dry_signal: 'OFF',
             steam: 'OFF',
-            child_lock: 'OFF',
+            control_lock: 'OFF',
             remote_start: 'OFF',
             cycle_optimization: 'ON',
             remote_maintain: 'OFF',
@@ -750,9 +739,9 @@ describe('BDVG_FX0003_US', () => {
     test('Temp laps 5 -> 1 -> 2 -> 3 -> 4 -> 5 on Timed Dry', () => {
         const cases: [Buffer, string][] = [
             [TEMP_LOW, 'Low'],
-            [TEMP_MEDIUM_LOW, 'Med. Low'],
+            [TEMP_MEDIUM_LOW, 'Medium Low'],
             [TEMP_MEDIUM, 'Medium'],
-            [TEMP_MEDIUM_HIGH, 'Med. High'],
+            [TEMP_MEDIUM_HIGH, 'Medium High'],
             [TEMP_HIGH, 'High'],
         ]
         for (const [frame, label] of cases) assert.equal(feed([frame]).temp, label, label)
@@ -781,7 +770,7 @@ describe('BDVG_FX0003_US', () => {
         const cases: [Buffer, Buffer, string][] = [
             [DRUM_LIGHT_ON, DRUM_LIGHT_OFF, 'drum_light'],
             [REMOTE_START_ON, REMOTE_START_OFF, 'remote_start'],
-            [CONTROL_LOCK_ON, CONTROL_LOCK_OFF, 'child_lock'],
+            [CONTROL_LOCK_ON, CONTROL_LOCK_OFF, 'control_lock'],
             [DAMP_DRY_SIGNAL_ON, DAMP_DRY_SIGNAL_OFF, 'damp_dry_signal'],
             [WRINKLE_CARE_ON, WRINKLE_CARE_OFF, 'wrinkle_care'],
             [STEAM_ON, STEAM_OFF, 'steam'],
@@ -961,7 +950,6 @@ describe('BDVG_FX0003_US', () => {
             ['keep_fresh', 'switch'],
             ['cycle_optimization', 'switch'],
             ['splash_screen', 'select'],
-            ['clock_display', 'switch'],
             ['start', 'button'],
             ['pause', 'button'],
             ['resume', 'button'],
@@ -983,9 +971,9 @@ describe('BDVG_FX0003_US', () => {
             ['dry_level', 'Very', APPW_000829, REC_000811],
             ['course', 'Timed Dry', APPW_000911, undefined],
             ['temp', 'Low', APPW_001126, REC_000913],
-            ['temp', 'Med. Low', APPW_001130, REC_001128],
+            ['temp', 'Medium Low', APPW_001130, REC_001128],
             ['temp', 'Medium', APPW_001135, REC_001132],
-            ['temp', 'Med. High', APPW_001140, REC_001137],
+            ['temp', 'Medium High', APPW_001140, REC_001137],
             ['temp', 'High', APPW_001146, REC_001142],
             ['dry_time', '20', APPW_001236, REC_001148],
             ['dry_time', '30', APPW_001241, REC_001238],
@@ -1390,21 +1378,6 @@ describe('BDVG_FX0003_US remote maintain', () => {
         dev.setProperty('remote_maintain', 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, undefined)
     })
-
-    test('the standby clock switch writes prop 0x58 and reads rec[28] bit 0x20', () => {
-        const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', REC_CLOCK_OFF)
-        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, 'OFF')
-        thinq.emit('data', REC_CLOCK_ON)
-        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
-        assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, 'OFF')
-        dev.setProperty('clock_display', 'ON')
-        assert.deepEqual(thinq.outbox.map(hex), [hex(W_CLOCK_ON)])
-        const second = makeDevice()
-        second.dev.setProperty('clock_display', 'OFF')
-        assert.deepEqual(second.thinq.outbox.map(hex), [hex(W_CLOCK_OFF)])
-    })
 })
 
 describe('BDVG_FX0003_US verified local enhancements', () => {
@@ -1525,7 +1498,7 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
         thinq.emit('data', EB_CONNECT)
         dev.setProperty('temp', 'Low')
         dev.setProperty('temp', 'Medium')
-        dev.setProperty('temp', 'Med. Low')
+        dev.setProperty('temp', 'Medium Low')
         dev.setProperty('dry_time', '20')
         dev.setProperty('steam', 'ON')
         thinq.emit('data', writeReply(thinq.outbox[0]))

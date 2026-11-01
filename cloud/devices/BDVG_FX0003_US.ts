@@ -149,9 +149,6 @@ const OPT4_REMOTE_MAINTAIN = 0x02
 
 const OPT5_OFFSET = 28
 const OPT5_KEEP_FRESH = 0x10
-// The standby screen's clock, as on FAFXU22007. The clock is a ThinQ UP feature: content DR-9 in the dryer's 0x86
-// content list (the modelJSON's upgradableNewBadge says WM-8, which this dryer refuses). Without it installed the
-// setting still switches, and the screen shows --:--.
 const OPT5_CLOCK_DISPLAY = 0x20
 
 const STATE_POWEROFF = 0
@@ -230,9 +227,9 @@ const DRY_LEVEL = Enum.of({
 // 0 on Air Dry and Rack Dry
 const TEMP = Enum.of({
     Low: 1,
-    'Med. Low': 2,
+    'Medium Low': 2,
     Medium: 3,
-    'Med. High': 4,
+    'Medium High': 4,
     High: 5,
 })
 
@@ -549,10 +546,10 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:monitor',
                         entity_category: 'config',
                     },
-                    child_lock: {
+                    control_lock: {
                         platform: 'binary_sensor',
-                        unique_id: '$deviceid-child_lock',
-                        state_topic: '$this/child_lock',
+                        unique_id: '$deviceid-control_lock',
+                        state_topic: '$this/control_lock',
                         name: 'Control lock',
                         icon: 'mdi:lock-outline',
                         entity_category: 'diagnostic',
@@ -1169,7 +1166,7 @@ export default class Device extends AABBDevice {
             bit(rec[OPT2_OFFSET], OPT2_ENERGY_SAVER),
             onOff((rec[OPT2_OFFSET] & OPT2_ENERGY_SAVER) !== 0),
         )
-        this.publishProperty('child_lock', onOff((rec[OPT3_OFFSET] & OPT3_CONTROL_LOCK) !== 0))
+        this.publishProperty('control_lock', onOff((rec[OPT3_OFFSET] & OPT3_CONTROL_LOCK) !== 0))
         this.publishProperty('remote_start', onOff((rec[OPT3_OFFSET] & OPT3_REMOTE_START) !== 0))
         this.publishSetting(
             76,

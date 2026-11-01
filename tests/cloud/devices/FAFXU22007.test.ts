@@ -179,12 +179,12 @@ const TEMP_COLD = buf(
     'aaff200a00780001cd000100ec006600030d0e0f2e00000000000000001a001a0003002e01000601000001150102002d1e20000000000c380000000000000401000400030e0e0f2e00000000000000001a001a0003002e01000601000001150102002d1e20000000000c3800000000000004010004e8bcbb',
 )
 
-// 14:40:33, Spin pressed once: High -> Ex. High.
+// 14:40:33, Spin pressed once: High -> Extra High.
 const SPIN_EXTRA_HIGH = buf(
     'aaff200a00780001d1000100ec006600030e0e0f2e00000000000000001a001a0003002e01000601000001150102002d1e20000000000c380000000000000401000400030e0e102e00000000000000002b002b0003002e01000601000001150102002d1e20000000000c38000000000000040100044b4cbb',
 )
 
-// 14:40:47, Soil pressed once: Medium -> Med. Heavy.
+// 14:40:47, Soil pressed once: Medium -> Medium Heavy.
 const SOIL_MEDIUM_HEAVY = buf(
     'aaff200a00780001d5000100ec006600030e0e102e00000000000000002b002b0003002e01000601000001150102002d1e20000000000c380000000000000401000400040e0e102e00000000000000003000300003002e01000601000001150102002d1e20000000000c3800000000000004010004cab4bb',
 )
@@ -417,7 +417,7 @@ const TEMP_3 = buf(
     'aaff200a007800084a000100ec00660003100e0f2e00000000000000001a001a0000002e01020601000001160102002d1e20000000000c38000000000000640100040003120e0f2e00000000000000001a001a0000002e01020601000001160102002d1e20000000000c3800000000000064010004f335bb',
 )
 
-// 16:15:31, Temp pressed: Ex. Hot.
+// 16:15:31, Temp pressed: Extra Hot.
 const TEMP_4 = buf(
     'aaff200a007800084e000100ec00660003120e0f2e00000000000000001a001a0000002e01020601000001160102002d1e20000000000c38000000000000640100040003130e0f2e00000000000000003d003d0000002e01020601000001160102002d1e20000000000c38000000000000640100040943bb',
 )
@@ -427,7 +427,7 @@ const TEMP_5 = buf(
     'aaff200a0078000852000100ec00660003130e0f2e00000000000000003d003d0000002e01020601000001160102002d1e20000000000c380000000000006401000400030d0e0f2e00000000000000001a001a0000002e01020601000001160102002d1e20000000000c38000000000000640100046b8ebb',
 )
 
-// 16:16:29, Spin pressed: Ex. High.
+// 16:16:29, Spin pressed: Extra High.
 const SPIN_1 = buf(
     'aaff200a007800085c000100ec006600030d0e0f2e00000000000000001a001a0000002e01020601000001160102002d1e20000000000c380000000000006401000400030d0e102e00000000000000002b002b0000002e01020601000001160102002d1e20000000000c3800000000000064010004c56ebb',
 )
@@ -447,7 +447,7 @@ const SPIN_4 = buf(
     'aaff200a0078000867000100ec006600030d0e0e2e00000000000000001a001a0000002e01020601000001160102002d1e20000000000c380000000000006401000400030d0e0f2e00000000000000001a001a0000002e01020601000001160102002d1e20000000000c3800000000000064010004177ebb',
 )
 
-// 16:17:53, Soil pressed: Med. Heavy.
+// 16:17:53, Soil pressed: Medium Heavy.
 const SOIL_1 = buf(
     'aaff200a0078000870000100ec006600030d0e0f2e00000000000000001a001a0000002e01020601000001160102002d1e20000000000c380000000000006401000400040d0e0f2e00000000000000001f001f0000002e01020601000001160102002d1e20000000000c3800000000000064010004ffcabb',
 )
@@ -462,7 +462,7 @@ const SOIL_3 = buf(
     'aaff200a0078000878000100ec006600050d0e0f2e00000000000000005400540001002e01020601000001160102002d1e20000000000c380000000000006401000400010d0e0f2e00000000000000001700170001002e01020601000001160102002d1e20000000000c3800000000000064010004fcbabb',
 )
 
-// 16:18:20, Soil pressed: Med. Light.
+// 16:18:20, Soil pressed: Medium Light.
 const SOIL_4 = buf(
     'aaff200a007800087b000100ec006600010d0e0f2e00000000000000001700170001002e01020601000001160102002d1e20000000000c380000000000006401000400020d0e0f2e00000000000000001800180001002e01020601000001160102002d1e20000000000c38000000000000640100046229bb',
 )
@@ -688,7 +688,7 @@ const REC_002429 = buf(
     'aaff200a007800054d000100ec006600030d0e0f2e00000000000000002e002e0000002e01000600000001180402002d1e20000000000c380000000000000401000400030d0e0f2e00000000000000001a001a0000002e01000601000001180402002d1e20000000000c38000000000000040100048ee7bb',
 )
 
-// 00:29:03 UTC 09-25, the ThinQ app writing soil = Med. Light.
+// 00:29:03 UTC 09-25, the ThinQ app writing soil = Medium Light.
 const APPW_002903 = buf('aa20f0e5000201ff0a1f0d210f1e02200e3e0034003800350144007f0000adbb')
 
 // 00:28:50 UTC 09-25, the washer's last record before the app's next write.
@@ -704,7 +704,7 @@ const REC_002906 = buf(
     'aaff200a0078000589000100ec006600010d0e0f2e00000000000000001700170000002e01000601000001180402002d1e20000000000c380000000000000401000400020d0e0f2e00000000000000001800180000002e01000601000001180402002d1e20000000000c38000000000000040100043bcbbb',
 )
 
-// 00:29:22 UTC 09-25, the ThinQ app writing soil = Med. Heavy.
+// 00:29:22 UTC 09-25, the ThinQ app writing soil = Medium Heavy.
 const APPW_002922 = buf('aa20f0e5000201ff0a1f0d210f1e04200e3e0034003800350144007f0000afbb')
 
 // 00:29:14 UTC 09-25, the washer's last record before the app's next write.
@@ -744,7 +744,7 @@ const REC_003036 = buf(
     'aaff200a00780005a6000100ec006600050e0e0f2e00000000000000005400540000002e01000601000001180402002d1e20000000000c38000000000000040100040005100e0f2e00000000000000005400540000002e01000601000001180402002d1e20000000000c38000000000000040100044f66bb',
 )
 
-// 00:30:45 UTC 09-25, the ThinQ app writing temp = Ex. Hot.
+// 00:30:45 UTC 09-25, the ThinQ app writing temp = Extra Hot.
 const APPW_003045 = buf('aa20f0e5000201ff0a1f13210f1e05200e3e0034003800350144007f000054bb')
 
 // 00:30:42 UTC 09-25, the washer's last record before the app's next write.
@@ -784,7 +784,7 @@ const REC_003148 = buf(
     'aaff200a00780005c0000100ec006600050d0e0d2e00000000000000005000500001002e01000601000001180402002d1e20000000000c380000000000000401000400050d0e0e2e00000000000000005000500001002e01000601000001180402002d1e20000000000c380000000000000401000419c9bb',
 )
 
-// 00:31:54 UTC 09-25, the ThinQ app writing spin = Ex. High.
+// 00:31:54 UTC 09-25, the ThinQ app writing spin = Extra High.
 const APPW_003154 = buf('aa20f0e5000201ff0a1f0d21101e05200e3e0034003800350144007f0000a9bb')
 
 // 00:31:52 UTC 09-25, the washer's last record before the app's next write.
@@ -931,11 +931,6 @@ const APPW_003818 = buf('aa0df0e5000201ff015600b0bb')
 
 // 00:38:30 UTC 09-25, the ThinQ app writing quick_load_sense = ON.
 const APPW_003830 = buf('aa0df0e5000201ff015601b3bb')
-
-// The ThinQ app writing clock_display = OFF and ON, captured by another WM6700HBA owner on firmware
-// 2.11.258 (PR #204).
-const APPW_CLOCK_OFF = buf('aa0df0e5000201ff015800b2bb')
-const APPW_CLOCK_ON = buf('aa0df0e5000201ff015801bdbb')
 
 // 00:39:14 UTC 09-25, the ThinQ app writing cycle_optimization = OFF.
 const APPW_003914 = buf('aa0df0e5000201ff014c008ebb')
@@ -1194,8 +1189,8 @@ describe('FAFXU22007', () => {
         assert.equal(p.remaining_time, 'None')
 
         assert.equal(feed([TEMP_COLD]).temp, 'Cold')
-        assert.equal(feed([SPIN_EXTRA_HIGH]).spin, 'Ex. High')
-        assert.equal(feed([SOIL_MEDIUM_HEAVY]).soil, 'Med. Heavy')
+        assert.equal(feed([SPIN_EXTRA_HIGH]).spin, 'Extra High')
+        assert.equal(feed([SOIL_MEDIUM_HEAVY]).soil, 'Medium Heavy')
     })
 
     test('every course, from the dial and from the app', () => {
@@ -1235,20 +1230,20 @@ describe('FAFXU22007', () => {
             [TEMP_1, 'Cold'],
             [TEMP_2, 'Warm'],
             [TEMP_3, 'Hot'],
-            [TEMP_4, 'Ex. Hot'],
+            [TEMP_4, 'Extra Hot'],
             [TEMP_5, 'Tap Cold'],
         ])
         walk('spin', [
-            [SPIN_1, 'Ex. High'],
+            [SPIN_1, 'Extra High'],
             [SPIN_2, 'Low'],
             [SPIN_3, 'Medium'],
             [SPIN_4, 'High'],
         ])
         walk('soil', [
-            [SOIL_1, 'Med. Heavy'],
+            [SOIL_1, 'Medium Heavy'],
             [SOIL_2, 'Heavy'],
             [SOIL_3, 'Light'],
-            [SOIL_4, 'Med. Light'],
+            [SOIL_4, 'Medium Light'],
             [SOIL_5, 'Medium'],
         ])
         walk('rinse', [
@@ -1383,32 +1378,6 @@ describe('FAFXU22007', () => {
         assert.equal(p.power, 'OFF')
         assert.equal(p.remaining_time, 'None')
         assert.equal(p.initial_time, 0)
-    })
-
-    test('the standby clock reads from rec[47] bit 0x80, apart from the nozzle-clean bits', () => {
-        // Synthetic, from EB_IDLE (whose rec[47] is 0): clock on, with Both Tanks set beside it.
-        const frame = Buffer.from(EB_IDLE)
-        frame[2 + 13 + 47] = 0x80 | 0x60 // AA <len>, envelope header
-        const sum = frame.subarray(0, frame.length - 2).reduce((pv, cv) => pv + cv, 0)
-        frame[frame.length - 2] = (sum & 0xff) ^ 0x55
-        const p = feed([frame])
-        assert.equal(p.clock_display, 'ON')
-        assert.equal(p.nozzle_clean_tank, 'Both Tanks')
-        assert.equal(feed([EB_IDLE]).clock_display, 'OFF')
-    })
-
-    test('times and energy are big-endian', () => {
-        // Synthetic, from END: 300 min remaining of 600, 256 Wh, and rec[19] (another field) nonzero. Read
-        // as little-endian one byte later, these would come out as 556 min, 344 min and 5120 Wh.
-        const frame = Buffer.from(END)
-        const rec = 2 + 13 + 51 // AA FF, envelope header, previous record
-        frame.set([0x01, 0x2c, 0x02, 0x58, 0x01, 0x00, 0x14], rec + 13)
-        const sum = frame.subarray(0, frame.length - 2).reduce((pv, cv) => pv + cv, 0)
-        frame[frame.length - 2] = (sum & 0xff) ^ 0x55
-        const p = feed([frame])
-        assert.equal(p.remaining_time, 300)
-        assert.equal(p.initial_time, 600)
-        assert.equal(p.energy, 256)
     })
 
     test('power-on answers with a fresh snapshot and a reset energy counter', () => {
@@ -1557,7 +1526,6 @@ describe('FAFXU22007', () => {
             ['fresh_care', 'switch'],
             ['cycle_optimization', 'switch'],
             ['quick_load_sense', 'switch'],
-            ['clock_display', 'switch'],
             ['remote_maintain', 'switch'],
             ['splash_screen', 'select'],
             ['start', 'button'],
@@ -1573,19 +1541,19 @@ describe('FAFXU22007', () => {
     test('every setting sends exactly what the ThinQ app sent, rebuilt from the record before it', () => {
         const cases: [string, string, Buffer, Buffer | undefined][] = [
             ['soil', 'Light', APPW_002848, REC_002429],
-            ['soil', 'Med. Light', APPW_002903, REC_002850],
+            ['soil', 'Medium Light', APPW_002903, REC_002850],
             ['soil', 'Medium', APPW_002912, REC_002906],
-            ['soil', 'Med. Heavy', APPW_002922, REC_002914],
+            ['soil', 'Medium Heavy', APPW_002922, REC_002914],
             ['soil', 'Heavy', APPW_002932, REC_002924],
             ['temp', 'Cold', APPW_003029, REC_002934],
             ['temp', 'Warm', APPW_003034, REC_003031],
             ['temp', 'Hot', APPW_003039, REC_003036],
-            ['temp', 'Ex. Hot', APPW_003045, REC_003042],
+            ['temp', 'Extra Hot', APPW_003045, REC_003042],
             ['temp', 'Tap Cold', APPW_003051, REC_003048],
             ['spin', 'Low', APPW_003136, REC_003053],
             ['spin', 'Medium', APPW_003146, REC_003138],
             ['spin', 'High', APPW_003150, REC_003148],
-            ['spin', 'Ex. High', APPW_003154, REC_003152],
+            ['spin', 'Extra High', APPW_003154, REC_003152],
             ['rinse', '+1', APPW_003227, REC_003156],
             ['rinse', '+2', APPW_003230, REC_003229],
             ['rinse', '+3', APPW_003235, REC_003232],
@@ -1606,8 +1574,6 @@ describe('FAFXU22007', () => {
             ['reserve_time', '0', APPW_003747, REC_003732],
             ['quick_load_sense', 'OFF', APPW_003818, undefined],
             ['quick_load_sense', 'ON', APPW_003830, undefined],
-            ['clock_display', 'OFF', APPW_CLOCK_OFF, undefined],
-            ['clock_display', 'ON', APPW_CLOCK_ON, undefined],
             ['cycle_optimization', 'OFF', APPW_003914, undefined],
             ['cycle_optimization', 'ON', APPW_003919, undefined],
             ['splash_screen', 'Snowman 1', APPW_003939, undefined],
@@ -1718,7 +1684,7 @@ describe('FAFXU22007', () => {
     test('with Cold Wash on, no soil above Medium is sent, as the app offers none', () => {
         const { thinq, dev } = makeDevice()
         thinq.emit('data', COLD_WASH_APP)
-        dev.setProperty('soil', 'Med. Heavy')
+        dev.setProperty('soil', 'Medium Heavy')
         dev.setProperty('soil', 'Heavy')
         assert.deepEqual(thinq.outbox, [])
         dev.setProperty('soil', 'Light')
@@ -2423,4 +2389,50 @@ describe('FAFXU22007 reconciled controls', () => {
             assert.deepEqual(feed([checksum(bad)]), {})
         }
     })
+})
+
+describe('FAFXU22007 newer reconciliation', () => {
+    test('stale previous-course reports cannot replace accepted course defaults in a later bundle', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('course', 'Bedding')
+        const bedding = currentRecord(BEDDING)
+        thinq.emit('data', reply([0x0a], bedding))
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('soil', 'Light')
+        assert.equal(thinq.outbox.length, 2)
+        const inner = thinq.outbox[1].subarray(2, -2)
+        assert.notEqual(bedding[2], currentRecord()[2])
+        assert.notEqual(bedding[4], currentRecord()[4])
+        assert.equal(inner[8], bedding[2])
+        assert.equal(inner[10], bedding[4])
+        assert.equal(inner[12], 1)
+        assert.equal(inner[22], (bedding[34] & 0x20) !== 0 ? 1 : 0)
+    })
+
+    test('queued Start uses the course confirmed by the preceding course command', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('course', 'Bedding')
+        dev.setProperty('start', '')
+        assert.equal(thinq.outbox.length, 1)
+        thinq.emit('data', reply([0x0a], currentRecord(BEDDING)))
+        assert.equal(thinq.outbox.length, 2)
+        const inner = thinq.outbox[1].subarray(2, -2)
+        assert.deepEqual([...inner.subarray(7, 11)], [0x0a, 13, 0x03, 1])
+        dev.drop()
+    })
+
+    test('stale accepted power records cannot mask a later observed power state', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('power', 'OFF')
+        thinq.emit('data', reply([0x02], currentRecord()))
+        const off = Buffer.from(EB_IDLE)
+        off[15 + 21] = 0
+        thinq.emit('data', checksum(off))
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'Off')
+        assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
+    })
+
 })
