@@ -7,6 +7,7 @@ import { allowExtendedType } from '@/util/casting'
 import AABBDevice, { type AwaitedWrite } from './aabb_device'
 import { Enum } from '@/util/enum'
 import crc16 from '@/util/crc16'
+import { ENDING_MELODY } from './ending_melody'
 
 // LG DLEX6700B electric dryer. BDH_D30007_US's framing and 42-byte record, but with a temperature
 // setting and different option bits.
@@ -61,6 +62,7 @@ const PROP_COURSE = 0x0a // 0xff, then PROP_DOWNLOADED_COURSE, for a downloaded 
 const PROP_DOWNLOADED_COURSE = 0x0b
 const PROP_BUZZER = 0x13
 const PROP_CYCLE_OPTIMIZATION = 0x4c // switching it on moves the course to AI Dry
+const PROP_MELODY = 0x50
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_KEEP_FRESH = 0x57
 const PROP_CLOCK_DISPLAY = 0x58
@@ -98,10 +100,11 @@ const WRITE_REPLY_RESULT_OFFSET = 8
 const WRITE_REFUSED = 0x03
 const WRITE_OK = new Set([0x00, 0x10, 0x11])
 
-// The LG cloud's commands (f0 24 <command> 01 <value>, as in FAFXU22007), and the dryer's reply to one:
-// 30 00 24 <result>. Only the cloud sends them, but a write from HA waits for their reply too.
+// Commands use f0 24 <command> 01 <value>; the dryer replies 30 00 24 <result>.
+// Keep Remote Start On has no established status readback: publish only a matched result00 ACK.
 const COMMAND_TYPE = 0x24
 const COMMAND_REPLY_TYPE = 0x00
+const SET_KEEP_REMOTE_START = [0xf0, COMMAND_TYPE, 0x10, 0x01]
 
 const EVENT_FRAME_TYPE = 0x03
 const EVENT_INNER_LEN = 18
@@ -124,6 +127,7 @@ const CONFIRMATION_WINDOW_MS = 30_000
 const SPENT_POWER_OFFSET = 17 // Wh, big-endian
 const BUZZER_OFFSET = 19
 const DOWNLOADED_COURSE_OFFSET = 23 // while rec[5] is 0xff
+const MELODY_OFFSET = 32
 const SPLASH_SCREEN_OFFSET = 33
 
 const OPT1_OFFSET = 24
@@ -142,10 +146,6 @@ const OPT3_REMOTE_START = 0x40
 
 const OPT4_OFFSET = 27
 const OPT4_CYCLE_OPTIMIZATION = 0x01
-// The dryer sits in End remote maintain on. The cloud's f0 24 10 01 01 (sent on every reconnect and at each
-// cycle start) is acknowledged in any state, but the cycle only ends this way when Remote Start was armed at
-// the panel when it began; the bit shows the state, never the setting, so it is a sensor.
-const OPT4_REMOTE_MAINTAIN = 0x02
 
 const OPT5_OFFSET = 28
 const OPT5_KEEP_FRESH = 0x10
@@ -534,6 +534,18 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:clock-outline',
                         entity_category: 'config',
                     },
+                    melody: {
+                        platform: 'select',
+                        unique_id: '$deviceid-melody',
+                        state_topic: '$this/melody',
+                        command_topic: '$this/melody/set',
+                        retain: false,
+                        optimistic: false,
+                        options: ENDING_MELODY.options,
+                        name: 'Ending melody',
+                        icon: 'mdi:music-note',
+                        entity_category: 'config',
+                    },
                     splash_screen: {
                         platform: 'select',
                         unique_id: '$deviceid-splash_screen',
@@ -560,15 +572,18 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/remote_start',
                         name: 'Remote start',
                         icon: 'mdi:cellphone-wireless',
-                        entity_category: 'diagnostic',
                     },
-                    remote_maintain: {
-                        platform: 'binary_sensor',
-                        unique_id: '$deviceid-remote_maintain',
-                        state_topic: '$this/remote_maintain',
-                        name: 'Remote maintain standby',
+                    keep_remote_start: {
+                        platform: 'switch',
+                        device_class: 'switch',
+                        unique_id: '$deviceid-keep_remote_start',
+                        state_topic: '$this/keep_remote_start',
+                        command_topic: '$this/keep_remote_start/set',
+                        retain: false,
+                        optimistic: false,
+                        name: 'Keep Remote Start On',
                         icon: 'mdi:remote',
-                        entity_category: 'diagnostic',
+                        entity_category: 'config',
                     },
                     problem: {
                         platform: 'binary_sensor',
@@ -589,6 +604,8 @@ export default class Device extends AABBDevice {
                 },
             }),
         )
+        // Clear retained ACK feedback from any previous connection; never restore a guessed setting.
+        this.publishProperty('keep_remote_start', undefined)
     }
 
     start() {
@@ -627,7 +644,8 @@ export default class Device extends AABBDevice {
     private group = 0
     private readonly pending = new Map<number, { value: number; owner: object }>()
 
-    protected writeTimedOut(_writes: readonly AwaitedWrite[]) {
+    protected writeTimedOut(writes: readonly AwaitedWrite[]) {
+        if (writes.some((write) => write.type === COMMAND_TYPE)) this.publishProperty('keep_remote_start', undefined)
         this.acceptedPower = undefined
         this.accepted.clear()
         this.pending.clear()
@@ -683,6 +701,7 @@ export default class Device extends AABBDevice {
             [PROP_COURSE, rec[COURSE_OFFSET]],
             [PROP_DOWNLOADED_COURSE, rec[DOWNLOADED_COURSE_OFFSET]],
             [PROP_BUZZER, rec[BUZZER_OFFSET]],
+            [PROP_MELODY, rec[MELODY_OFFSET]],
             [PROP_SPLASH_SCREEN, rec[SPLASH_SCREEN_OFFSET]],
             [PROP_KEEP_FRESH, bit(rec[OPT5_OFFSET], OPT5_KEEP_FRESH)],
             [PROP_CLOCK_DISPLAY, bit(rec[OPT5_OFFSET], OPT5_CLOCK_DISPLAY)],
@@ -760,6 +779,17 @@ export default class Device extends AABBDevice {
             },
             barrier ? undefined : `singleton:${group}:${prop}`,
         )
+    }
+
+    private writeKeepRemoteStart(value: number) {
+        if (this.writesBlocked) return
+        // This command is independent of E5 settings, but must not split or coalesce across bundles.
+        this.pendingBundle = undefined
+        this.group++
+        this.queueWrite(() => {
+            if (this.writesBlocked) return
+            return Buffer.from([...SET_KEEP_REMOTE_START, value])
+        })
     }
 
     protected writeType(inner: Buffer) {
@@ -847,8 +877,13 @@ export default class Device extends AABBDevice {
         } else if (prop === 'cycle_optimization' || prop === 'keep_fresh') {
             if (value !== 'ON' && value !== 'OFF') return
             this.writeProps(prop === 'keep_fresh' ? PROP_KEEP_FRESH : PROP_CYCLE_OPTIMIZATION, value === 'ON' ? 1 : 0)
+        } else if (prop === 'keep_remote_start') {
+            if (value === 'ON' || value === 'OFF') this.writeKeepRemoteStart(value === 'ON' ? 1 : 0)
         } else if (prop === 'clock_display') {
             if (value === 'ON' || value === 'OFF') this.writeProps(PROP_CLOCK_DISPLAY, value === 'ON' ? 1 : 0)
+        } else if (prop === 'melody') {
+            const idx = ENDING_MELODY.unmap(value)
+            if (idx !== undefined) this.writeProps(PROP_MELODY, idx)
         } else if (prop === 'splash_screen') {
             const idx = SPLASH_SCREEN.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_SPLASH_SCREEN, idx)
@@ -887,7 +922,17 @@ export default class Device extends AABBDevice {
         if (buf.length < 2 || buf[0] !== CLASS_BYTE) return
         if (buf[1] === WRITE_REPLY_TYPE) return this.processWriteReply(buf)
         if (buf.length === 4 && buf[1] === COMMAND_REPLY_TYPE && buf[2] === COMMAND_TYPE) {
-            this.writeAnswered(COMMAND_TYPE)
+            const write = this.writeAnswered(COMMAND_TYPE)
+            if (
+                !write ||
+                write.inner.length !== 5 ||
+                !write.inner.subarray(0, 4).equals(Buffer.from(SET_KEEP_REMOTE_START)) ||
+                write.inner[4] > 1
+            )
+                return
+            const result = buf[3]
+            if (result === 0) this.publishProperty('keep_remote_start', onOff(write.inner[4] === 1))
+            if (write.own) this.setProblem(result === 0 ? undefined : `Command refused (0x${hex2(result)})`)
             return
         }
         if (buf.length < 13 || buf[1] !== ENVELOPE_TYPE) return
@@ -1026,6 +1071,7 @@ export default class Device extends AABBDevice {
                         : onOff(raw !== 0),
             )
         } else if (prop === PROP_BUZZER) this.publishProperty('buzzer', BUZZER.map(raw))
+        else if (prop === PROP_MELODY) this.publishProperty('melody', ENDING_MELODY.map(raw))
         else if (prop === PROP_SPLASH_SCREEN) this.publishProperty('splash_screen', SPLASH_SCREEN.map(raw))
         else if (prop === PROP_KEEP_FRESH) this.publishProperty('keep_fresh', onOff(raw !== 0))
         else if (prop === PROP_CLOCK_DISPLAY) this.publishProperty('clock_display', onOff(raw !== 0))
@@ -1174,7 +1220,6 @@ export default class Device extends AABBDevice {
             bit(rec[OPT4_OFFSET], OPT4_CYCLE_OPTIMIZATION),
             onOff((rec[OPT4_OFFSET] & OPT4_CYCLE_OPTIMIZATION) !== 0),
         )
-        this.publishProperty('remote_maintain', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_MAINTAIN) !== 0))
         this.publishSetting(
             87,
             'keep_fresh',
@@ -1187,6 +1232,7 @@ export default class Device extends AABBDevice {
             bit(rec[OPT5_OFFSET], OPT5_CLOCK_DISPLAY),
             onOff((rec[OPT5_OFFSET] & OPT5_CLOCK_DISPLAY) !== 0),
         )
+        this.publishSetting(PROP_MELODY, 'melody', rec[MELODY_OFFSET], ENDING_MELODY.map(rec[MELODY_OFFSET]))
         this.publishSetting(
             PROP_SPLASH_SCREEN,
             'splash_screen',

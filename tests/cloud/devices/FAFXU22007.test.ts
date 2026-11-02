@@ -1170,6 +1170,7 @@ describe('FAFXU22007', () => {
             remote_maintain: 'OFF',
             door_lock: 'OFF',
             quick_load_sense: 'ON',
+            melody: 'Normal',
             splash_screen: 'Normal',
             clock_display: 'OFF',
             drawer: 'OFF',
@@ -1907,6 +1908,189 @@ function currentRecord(source = EB_IDLE) {
 }
 const BUNDLE_IDS = [0x1f, 0x21, 0x1e, 0x20, 0x3e, 0x34, 0x38, 0x35, 0x44, 0x7f]
 
+// Privacy-limited E5/E6/EC frames captured from a WM6700HBA on 2026-11-01; no session metadata.
+// Each tuple is [panel label, singleton command, accepted reply, previous/current status].
+const MELODY_CAPTURES = [
+    [
+        'Normal',
+        'aa0df0e5000201ff0150008abb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000009040100045dbb',
+        'aaff200a0078005981000100ec006600030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c380000000007090401000400030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c3800000000000904010004b2a0bb',
+    ],
+    [
+        'Vivaldi Winter',
+        'aa0df0e5000201ff015001b5bb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000109040100045cbb',
+        'aaff200a0078005995000100ec006600030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c380000000006090401000400030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c3800000000010904010004c987bb',
+    ],
+    [
+        "Bach's Minuet in G major",
+        'aa0df0e5000201ff015002b4bb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0000002e010006000000010f020200301e20000000000c38000000000209040100045cbb',
+        'aaff200a007800596c000100ec006600030d0e0f2e00000000000000002e002e0000002e010006000000010f020200301e20000000000c380000000009090401000400030d0e0f2e00000000000000002e002e0000002e010006000000010f020200301e20000000000c380000000002090401000405c6bb',
+    ],
+    [
+        'Sweet Home',
+        'aa0df0e5000201ff015003b7bb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000309040100045ebb',
+        'aaff200a007800598d000100ec006600030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000a090401000400030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000309040100046301bb',
+    ],
+    [
+        'Breeze',
+        'aa0df0e5000201ff015004b6bb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c380000000004090401000459bb',
+        'aaff200a0078005979000100ec006600030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000b090401000400030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000409040100041a8fbb',
+    ],
+    [
+        'Old MacDonald',
+        'aa0df0e5000201ff015005b1bb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c380000000005090401000458bb',
+        'aaff200a0078005985000100ec006600030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c380000000000090401000400030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c3800000000050904010004ce2cbb',
+    ],
+    [
+        'Verdi La Traviata Drinking Song',
+        'aa0df0e5000201ff015006b0bb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000609040100045bbb',
+        'aaff200a0078005991000100ec006600030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c380000000003090401000400030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c380000000006090401000411a0bb',
+    ],
+    [
+        'Bubble',
+        'aa0df0e5000201ff015007b3bb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000709040100045abb',
+        'aaff200a007800597d000100ec006600030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c380000000004090401000400030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c3800000000070904010004544ebb',
+    ],
+    [
+        'Beethoven Symphony No. 5',
+        'aa0df0e5000201ff015008b2bb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0000002e010006000000010f020200301e20000000000c38000000000809040100045abb',
+        'aaff200a0078005970000100ec006600030d0e0f2e00000000000000002e002e0000002e010006000000010f020200301e20000000000c380000000002090401000400030d0e0f2e00000000000000002e002e0000002e010006000000010f020200301e20000000000c38000000000809040100049d8fbb',
+    ],
+    [
+        'Arirang',
+        'aa0df0e5000201ff015009bdbb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0000002e010006000000010f020200301e20000000000c380000000009090401000445bb',
+        'aaff200a0078005953000100ec006600030d0e0f2e00000000000000002e002e0000002e010006000000010f020200301e20000000000c380000000001090401000400030d0e0f2e00000000000000002e002e0000002e010006000000010f020200301e20000000000c38000000000909040100041a68bb',
+    ],
+    [
+        "Pachelbel's Canon",
+        'aa0df0e5000201ff01500abcbb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000a090401000447bb',
+        'aaff200a0078005989000100ec006600030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c380000000005090401000400030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000a0904010004abc2bb',
+    ],
+    [
+        'Beethoven Symphony No. 9',
+        'aa0df0e5000201ff01500bbfbb',
+        'aa4020e6000201ff01500000030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000b090401000446bb',
+        'aaff200a0078005975000100ec006600030d0e0f2e00000000000000002e002e0000002e010006000000010f020200301e20000000000c380000000008090401000400030d0e0f2e00000000000000002e002e0001002e010006000000010f020200301e20000000000c38000000000b0904010004eebcbb',
+    ],
+] as const
+
+describe('FAFXU22007 ending melody', () => {
+    test('config select and all twelve captured singleton commands use the ordinary queue without an echo', () => {
+        for (const [label, command, accepted] of MELODY_CAPTURES) {
+            const { ha, thinq, dev } = makeDevice()
+            dev.publishConfig()
+            const c = ha.devices[DEVICE_ID].config!.components.melody as Record<string, unknown>
+            assert.equal(c.platform, 'select')
+            assert.equal(c.unique_id, '$deviceid-melody')
+            assert.equal(c.name, 'Ending melody')
+            assert.equal(c.icon, 'mdi:music-note')
+            assert.equal(c.entity_category, 'config')
+            assert.equal(c.retain, false)
+            assert.equal(c.optimistic, false)
+            assert.deepEqual(
+                c.options,
+                MELODY_CAPTURES.map(([name]) => name),
+            )
+            thinq.emit('data', EB_IDLE)
+            const before = applianceProperties(ha.devices[DEVICE_ID].properties)
+            dev.setProperty('melody', label)
+            assert.deepEqual(thinq.outbox, [buf(command)])
+            assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), before)
+            thinq.emit('data', buf(accepted))
+            assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), { ...before, melody: label })
+            dev.drop()
+        }
+    })
+
+    test('all twelve unmodified captured EC frames publish the current melody in a fresh device', () => {
+        for (const [label, , , status] of MELODY_CAPTURES) {
+            const frame = buf(status)
+            assert.equal(crc16(frame.subarray(0, -3)), frame.readUInt16BE(frame.length - 3))
+            const p = feed([frame])
+            assert.equal(p.melody, label)
+            assert.equal(p.splash_screen, 'Halloween')
+            assert.equal(p.clock_display, 'OFF')
+            assert.equal(p.nozzle_clean_tank, 'None')
+            assert.equal(p.course, 'Normal')
+        }
+    })
+
+    test('only a matched accepted actual record publishes; refusal, wrong property and generation do not', () => {
+        const arirang = buf(MELODY_CAPTURES[9][2])
+        for (const outcome of ['accepted', 'refused', 'wrong property', 'course', 'off'] as const) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', EB_IDLE)
+            dev.setProperty('melody', 'Vivaldi Winter')
+            if (outcome === 'course') thinq.emit('data', BEDDING)
+            if (outcome === 'off') thinq.emit('data', POWER_OFF)
+            const before = applianceProperties(ha.devices[DEVICE_ID].properties)
+            if (outcome === 'refused') thinq.emit('data', reply([0x50], arirang.subarray(11, -2), [3]))
+            else if (outcome === 'wrong property') thinq.emit('data', reply([0x51], arirang.subarray(11, -2)))
+            else thinq.emit('data', arirang)
+            const after = applianceProperties(ha.devices[DEVICE_ID].properties)
+            assert.equal(after.melody, outcome === 'accepted' ? 'Arirang' : before.melody)
+            for (const key of ['splash_screen', 'clock_display', 'nozzle_clean_tank', 'buzzer', 'course'])
+                assert.equal(after[key], before[key])
+            if (outcome === 'refused') assert.match(String(after.problem_reason), /refused.*0x03/)
+            dev.drop()
+        }
+    })
+
+    test('accepted actual melody keeps the existing bounded overlay and yields to later observed status', (ctx) => {
+        const now = Date.now()
+        const clock = ctx.mock.method(Date, 'now', () => now)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_IDLE)
+        dev.setProperty('melody', 'Vivaldi Winter')
+        thinq.emit('data', buf(MELODY_CAPTURES[9][2]))
+        thinq.emit('data', EB_IDLE)
+        assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Arirang')
+        clock.mock.mockImplementation(() => now + 30_000)
+        thinq.emit('data', EB_IDLE)
+        assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
+        dev.drop()
+    })
+
+    test('invalid labels and missing or Off context send no command or query', () => {
+        const { thinq, dev } = makeDevice()
+        dev.setProperty('melody', 'Arirang')
+        thinq.emit('data', EB_IDLE)
+        for (const label of ['', 'arirang', '9', 'ON', 'Arirang ', 'unknown']) dev.setProperty('melody', label)
+        thinq.emit('data', POWER_OFF)
+        dev.setProperty('melody', 'Arirang')
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(
+            thinq.sent.filter((message) => message.cmd !== 'ack'),
+            [],
+        )
+        dev.drop()
+    })
+
+    test('damaged captured EC frames cannot publish melody through strict processData', () => {
+        const captured = buf(MELODY_CAPTURES[9][3])
+        for (const offset of [4, 13, 66 + 45, captured.length - 3]) {
+            const bad = Buffer.from(captured)
+            bad[offset] ^= 1
+            assert.deepEqual(feed([bad]), {})
+        }
+        const marker = Buffer.from(captured)
+        marker[66] = 1
+        assert.deepEqual(feed([checksum(marker)]), {})
+    })
+})
+
 describe('FAFXU22007 clock display', () => {
     test('is a config switch; valid commands match independently checked contributor frames', () => {
         for (const [value, expected] of [
@@ -2434,5 +2618,4 @@ describe('FAFXU22007 newer reconciliation', () => {
         assert.equal(ha.devices[DEVICE_ID].properties.status, 'Off')
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
     })
-
 })

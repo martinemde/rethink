@@ -92,6 +92,14 @@ are sent.
 | RC90V9_WW            | RC91V9EV2Q, Heat Pump Dryer          | 🫤 preliminary support       |
 | RC90V9_AUS           | DVH9-09B, Heat Pump Dryer            | 🫤 preliminary support       |
 
+WM6700HBA (`FAFXU22007`) and DLEX6700B (`BDVG_FX0003_US`) expose an
+Ending melody configuration select with twelve choices. All twelve selections
+were captured with accepted replies and matching fresh status on each appliance.
+Audible playback of each tune and the HA command path are not separately tested.
+DLEX6700B also exposes Remote start as a primary sensor and Keep Remote Start On
+as a configuration switch. The switch shows matched successful-command feedback;
+its status-record readback is not yet established, so it starts unknown on reconnect.
+
 #### WashTowers (combined washer+dryer)
 
 | ThinQ model       | Appliance             | Support           |

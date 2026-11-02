@@ -1,6 +1,8 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import DUT from '@/cloud/devices/BDVG_FX0003_US'
+import AABBDevice from '@/cloud/devices/aabb_device'
+import { ENDING_MELODY } from '@/cloud/devices/ending_melody'
 import crc16 from '@/util/crc16'
 import type { Metadata } from '@/cloud/thinq'
 import { MockHAConnection, MockThinq2Device, buf, hex } from '@/tests/helpers/mocks'
@@ -683,10 +685,11 @@ describe('BDVG_FX0003_US', () => {
             control_lock: 'OFF',
             remote_start: 'OFF',
             cycle_optimization: 'ON',
-            remote_maintain: 'OFF',
+            keep_remote_start: 'None',
             energy_saver: 'OFF',
             keep_fresh: 'OFF',
             clock_display: 'OFF',
+            melody: 'Normal',
             splash_screen: 'Snowman 1', // what the app showed until it was changed on 09-25
         })
     })
@@ -822,13 +825,13 @@ describe('BDVG_FX0003_US', () => {
     })
 
     test('the door is an event, not a record field', () => {
-        assert.deepEqual(feed([DOOR_OPEN]), { power: 'ON', door: 'ON' })
+        assert.deepEqual(feed([DOOR_OPEN]), { keep_remote_start: 'None', power: 'ON', door: 'ON' })
         assert.equal(feed([DOOR_OPEN, DOOR_SHUT]).door, 'OFF')
         assert.equal(feed([EB_CONNECT]).door, undefined)
     })
 
     test('power follows the event payload byte 9, and the power-off record clears the course', () => {
-        assert.deepEqual(feed([POWER_ON_EVENT]), { power: 'OFF' })
+        assert.deepEqual(feed([POWER_ON_EVENT]), { keep_remote_start: 'None', power: 'OFF' })
         const p = feed([APP_RACK_DRY, POWER_OFF_EVENT, POWER_OFF_RECORD])
         assert.equal(p.power, 'OFF')
         assert.equal(p.status, 'Off')
@@ -856,12 +859,12 @@ describe('BDVG_FX0003_US', () => {
 
         thinq.emit('data', END)
         assert.equal(p().status, 'End remote maintain on')
-        assert.equal(p().remote_maintain, 'ON')
+        assert.equal(p().keep_remote_start, 'None')
         assert.equal(p().energy, 156)
 
         thinq.emit('data', OFF_AFTER_END)
         assert.equal(p().power, 'OFF')
-        assert.equal(p().remote_maintain, 'OFF')
+        assert.equal(p().keep_remote_start, 'None')
         assert.equal(p().remaining_time, 'None')
     })
 
@@ -876,7 +879,7 @@ describe('BDVG_FX0003_US', () => {
     })
 
     test('with no power write pending, a write reply publishes nothing', () => {
-        assert.deepEqual(feed([E6_CHIME_STALE, E6_REMOTE_ON_REPLY]), {})
+        assert.deepEqual(feed([E6_CHIME_STALE, E6_REMOTE_ON_REPLY]), { keep_remote_start: 'None' })
     })
 
     test('a chime reply does not confirm a pending power write', () => {
@@ -948,6 +951,7 @@ describe('BDVG_FX0003_US', () => {
             ['steam', 'switch'],
             ['energy_saver', 'switch'],
             ['keep_fresh', 'switch'],
+            ['keep_remote_start', 'switch'],
             ['cycle_optimization', 'switch'],
             ['splash_screen', 'select'],
             ['start', 'button'],
@@ -1087,7 +1091,7 @@ describe('BDVG_FX0003_US', () => {
                     'aaff200a0045000042000100eb003300030d0e0f2e00000000000000002e002e0000002e01000600000001150402002d1e20000000000c3800000000000004010004553dbb',
                 ),
             ]),
-            {},
+            { keep_remote_start: 'None' },
         )
     })
 
@@ -1335,48 +1339,271 @@ describe('BDVG_FX0003_US problem sensor', () => {
         dev.setProperty('power', 'ON')
         assert.equal(thinq.outbox.length, 1)
         thinq.emit('data', E6_CHIME_REFUSED)
-        assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), {})
+        assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), { keep_remote_start: 'None' })
         assert.equal(thinq.outbox.length, 2)
     })
 })
 
-// The cloud's f0 24 10 01 01 (Remote Maintain on), sent on reconnect and at cycle start, and the dryer's ack.
-const CLOUD_REMOTE_MAINTAIN_ON = 'AA09F0241001018CBB'
-const REMOTE_MAINTAIN_REPLY = buf('aa083000240053bb')
+// Real 2026-11-01 UTC Keep Remote Start On captures: 23:33:25.229 ON, 23:33:52.283 OFF,
+// 23:34:26.354 ON. Each was followed 79–81 ms later by the same result00 reply.
+const KEEP_REMOTE_START_ON = buf('aa09f0241001018cbb')
+const KEEP_REMOTE_START_OFF = buf('aa09f0241001008dbb')
+const KEEP_REMOTE_START_REPLY = buf('aa083000240053bb')
 
-describe('BDVG_FX0003_US remote maintain', () => {
-    // While bridged, the cloud's packets go out through the same device object as ours.
-    test("the ack of the cloud's command changes nothing", () => {
+// Sanitized refusal/malformed variants below are not additional captures.
+const commandReply = (result: number) => AABBDevice.frame(Buffer.from([0x30, 0, 0x24, result]))
+
+describe('BDVG_FX0003_US Keep Remote Start On', () => {
+    test('a nonoptimistic configuration switch replaces the old end-state sensor', () => {
+        const { ha, dev } = makeDevice()
+        const c = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        assert.deepEqual(c.keep_remote_start, {
+            platform: 'switch',
+            device_class: 'switch',
+            unique_id: '$deviceid-keep_remote_start',
+            state_topic: '$this/keep_remote_start',
+            command_topic: '$this/keep_remote_start/set',
+            retain: false,
+            optimistic: false,
+            name: 'Keep Remote Start On',
+            icon: 'mdi:remote',
+            entity_category: 'config',
+        })
+        assert.equal(c.remote_maintain, undefined)
+        assert.equal(c.remote_start.platform, 'binary_sensor')
+        assert.equal(c.remote_start.entity_category, undefined)
+        dev.setProperty('remote_maintain', 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, undefined)
+    })
+
+    test('all three captured commands match exact bytes and publish only after their success ACK', (t) => {
+        const { ha, thinq, dev } = makeDevice()
+        const publish = t.mock.method(ha, 'publishProperty')
+        for (const [value, packet] of [
+            ['ON', KEEP_REMOTE_START_ON],
+            ['OFF', KEEP_REMOTE_START_OFF],
+            ['ON', KEEP_REMOTE_START_ON],
+        ] as const) {
+            const before = publish.mock.callCount()
+            dev.setProperty('keep_remote_start', value)
+            assert.deepEqual(thinq.outbox[thinq.outbox.length - 1], packet)
+            assert.equal(publish.mock.callCount(), before)
+            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, value)
+            assert.equal(
+                publish.mock.calls.filter((c) => c.arguments[1] === 'keep_remote_start').length,
+                thinq.outbox.length,
+            )
+        }
+        assert.deepEqual(thinq.outbox, [KEEP_REMOTE_START_ON, KEEP_REMOTE_START_OFF, KEEP_REMOTE_START_ON])
+        assert.deepEqual(acks(thinq), []) // a command reply is not itself acknowledged
+        dev.drop()
+    })
+
+    test('construction and reconstruction clear retained feedback without startup writes; reports never set it', () => {
+        const { ha, thinq, dev } = makeDevice()
+        dev.start()
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(acks(thinq), [])
+        for (const frame of [EB_CONNECT, END, OFF_AFTER_END]) {
+            thinq.emit('data', frame)
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+            assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, undefined)
+        }
+        dev.setProperty('keep_remote_start', 'ON')
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        for (const frame of [OFF_AFTER_END, END, EB_CONNECT]) thinq.emit('data', frame)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
+        dev.drop()
+        const reconnected = new MockThinq2Device(DEVICE_ID, META)
+        const fresh = new DUT(ha.asConnection(), reconnected, META)
+        fresh.start()
+        reconnected.emit('data', END)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'End remote maintain on')
+        assert.deepEqual(reconnected.outbox, [])
+        fresh.drop()
+    })
+
+    test('no status, power, course or Remote Start gate is added; invalid values send nothing', () => {
+        for (const frame of [undefined, OFF_AFTER_END, DRYING, REMOTE_START_OFF]) {
+            const { thinq, dev } = makeDevice()
+            if (frame) thinq.emit('data', frame)
+            for (const invalid of ['', 'on', 'off', '1', '0', 'true', 'ON ', 'bogus'])
+                dev.setProperty('keep_remote_start', invalid)
+            assert.deepEqual(thinq.outbox, [])
+            dev.setProperty('keep_remote_start', 'ON')
+            assert.deepEqual(thinq.outbox, [KEEP_REMOTE_START_ON])
+            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            dev.drop()
+        }
+        const { thinq, dev } = makeDevice()
+        const noCourse = Buffer.from(EB_CONNECT.subarray(15, 57))
+        noCourse[5] = 0
+        thinq.emit('data', longFrame(0xeb, noCourse))
+        dev.setProperty('keep_remote_start', 'OFF')
+        assert.deepEqual(thinq.outbox, [KEEP_REMOTE_START_OFF])
+        dev.drop()
+    })
+
+    test('nonzero results retain prior ACK feedback and set only our diagnostic; success clears it', () => {
+        const { ha, thinq, dev } = makeDevice()
+        dev.setProperty('keep_remote_start', 'OFF')
+        thinq.emit('data', commandReply(3))
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+        dev.setProperty('keep_remote_start', 'ON')
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        for (const result of [3, 0x10, 0x11, 0x13]) {
+            dev.setProperty('keep_remote_start', 'OFF')
+            thinq.emit('data', commandReply(result))
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
+            assert.equal(ha.devices[DEVICE_ID].properties.problem, 'ON')
+            assert.equal(
+                ha.devices[DEVICE_ID].properties.problem_reason,
+                `Command refused (0x${result.toString(16).padStart(2, '0')})`,
+            )
+        }
+        dev.setProperty('keep_remote_start', 'OFF')
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.problem, 'OFF')
+        dev.drop()
+    })
+
+    test('unsolicited and malformed replies cannot publish or release a pending command', (t) => {
+        const { ha, thinq, dev } = makeDevice()
+        const publish = t.mock.method(ha, 'publishProperty')
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+        dev.setProperty('keep_remote_start', 'ON')
+        dev.setProperty('keep_remote_start', 'OFF')
+        const badChecksum = Buffer.from(KEEP_REMOTE_START_REPLY)
+        badChecksum[6] ^= 1
+        const badLength = Buffer.from(KEEP_REMOTE_START_REPLY)
+        badLength[1]--
+        for (const frame of [
+            badChecksum,
+            badLength,
+            AABBDevice.frame(buf('20002400')), // wrong class
+            AABBDevice.frame(buf('30002500')), // other command type
+            AABBDevice.frame(buf('30012400')), // other reply type
+            AABBDevice.frame(buf('300024')), // missing result
+            AABBDevice.frame(buf('3000240000')), // extra byte
+            buf('aa083000e50092bb'), // E5 receipt, not this command's ACK
+        ]) {
+            thinq.emit('data', frame)
+            assert.equal(thinq.outbox.length, 1)
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+        }
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
+        assert.deepEqual(thinq.outbox, [KEEP_REMOTE_START_ON, KEEP_REMOTE_START_OFF])
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'OFF')
+        const settingCalls = () => publish.mock.calls.filter((c) => c.arguments[1] === 'keep_remote_start').length
+        const before = settingCalls()
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        assert.equal(settingCalls(), before) // no awaited write remains
+        dev.drop()
+    })
+
+    test('known bridge writes update ACK feedback without changing our diagnostic', () => {
         const { ha, thinq, dev } = makeDevice()
         thinq.emit('data', EB_CONNECT)
         dev.setProperty('buzzer', 'Off')
         thinq.emit('data', E6_CHIME_REFUSED)
-        dev.setProperty('buzzer', 'Low')
-        dev.setProperty('buzzer', 'Medium')
-        thinq.send_packet(buf(CLOUD_REMOTE_MAINTAIN_ON))
-        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
-        assert.equal(thinq.outbox.length, 3)
-        assert.equal(ha.devices[DEVICE_ID].properties.problem, 'ON')
+        for (const packet of [KEEP_REMOTE_START_ON, KEEP_REMOTE_START_OFF]) {
+            thinq.send_packet(packet)
+            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, packet[6] === 1 ? 'ON' : 'OFF')
+            assert.equal(ha.devices[DEVICE_ID].properties.problem, 'ON')
+        }
+        thinq.send_packet(KEEP_REMOTE_START_ON)
+        thinq.emit('data', commandReply(3))
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.problem_reason, 'Command refused (0x03)')
+        dev.drop()
     })
 
-    test("a write from HA waits for the dryer's ack of the cloud's command", () => {
+    test('generic type24 commands settle once without being mistaken for setting feedback', () => {
+        for (const inner of ['f024110101', 'f024100201', 'f024100102', 'f0241001', 'f02410010100']) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.send_packet(AABBDevice.frame(buf(inner)))
+            thinq.send_packet(KEEP_REMOTE_START_ON)
+            dev.setProperty('keep_remote_start', 'OFF')
+            assert.equal(thinq.outbox.length, 2)
+            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+            assert.equal(thinq.outbox.length, 2) // second bridge command still awaits its own ACK
+            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
+            assert.equal(thinq.outbox.length, 3)
+            assert.deepEqual(thinq.outbox[2], KEEP_REMOTE_START_OFF)
+            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'OFF')
+            dev.drop()
+        }
+    })
+
+    test('a queued command waits for both an inflight E5 and a bridge command', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_CONNECT)
+        dev.setProperty('buzzer', 'Low')
+        thinq.send_packet(KEEP_REMOTE_START_ON)
+        dev.setProperty('keep_remote_start', 'OFF')
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        assert.equal(thinq.outbox.length, 2)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
+        thinq.emit('data', writeReply(thinq.outbox[0]))
+        assert.deepEqual(thinq.outbox[2], KEEP_REMOTE_START_OFF)
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        dev.drop()
+    })
+
+    test('commands preserve course/default bundle order and are barriers to unsent bundle coalescing', () => {
         const { thinq, dev } = makeDevice()
         thinq.emit('data', EB_CONNECT)
-        thinq.send_packet(buf(CLOUD_REMOTE_MAINTAIN_ON))
-        dev.setProperty('buzzer', 'Off')
+        dev.setProperty('buzzer', 'Low')
+        dev.setProperty('course', 'Normal')
+        dev.setProperty('temp', 'Low')
+        dev.setProperty('keep_remote_start', 'ON')
+        dev.setProperty('temp', 'Medium')
+        dev.setProperty('temp', 'High') // only this side of the command may coalesce
+        dev.setProperty('keep_remote_start', 'OFF')
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
-        assert.deepEqual(thinq.outbox.map(hex), [CLOUD_REMOTE_MAINTAIN_ON, hex(localChime(0))])
+        thinq.emit('data', writeReply(thinq.outbox[0]))
+        assert.equal(thinq.outbox[1][9], 0x0a)
+        assert.equal(thinq.outbox[1][10], 7)
+        thinq.emit('data', writeReply(thinq.outbox[1], DIAL_NORMAL.subarray(57, 99)))
+        assert.equal(thinq.outbox[2].subarray(9, -2).toString('hex'), '20011e033f003400380136000f00700000')
+        thinq.emit('data', writeReply(thinq.outbox[2]))
+        assert.deepEqual(thinq.outbox[3], KEEP_REMOTE_START_ON)
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        assert.equal(thinq.outbox[4].subarray(9, -2).toString('hex'), '20051e033f003400380136000f00700000')
+        thinq.emit('data', writeReply(thinq.outbox[4]))
+        assert.deepEqual(thinq.outbox[5], KEEP_REMOTE_START_OFF)
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        assert.equal(thinq.outbox.length, 6)
+        dev.drop()
     })
 
-    test('the standby bit is a sensor, not a control', () => {
-        const { ha, dev } = makeDevice()
-        dev.publishConfig()
-        const c = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-        assert.equal(c.remote_maintain.platform, 'binary_sensor')
-        assert.equal(c.remote_maintain.command_topic, undefined)
-        dev.setProperty('remote_maintain', 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, undefined)
+    test('the existing 3s timeout blocks queued and later writes, ignores late ACKs and never retries', (t) => {
+        t.mock.timers.enable({ apis: ['setTimeout'] })
+        const { ha, thinq, dev } = makeDevice()
+        dev.setProperty('keep_remote_start', 'ON')
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        dev.setProperty('keep_remote_start', 'OFF')
+        dev.setProperty('keep_remote_start', 'ON')
+        t.mock.timers.tick(3000)
+        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        dev.setProperty('keep_remote_start', 'OFF')
+        dev.setProperty('power', 'ON')
+        t.mock.timers.tick(60_000)
+        assert.deepEqual(thinq.outbox, [KEEP_REMOTE_START_ON, KEEP_REMOTE_START_OFF])
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /timed out/)
+        dev.drop()
     })
 })
 
@@ -1630,7 +1857,7 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
         }
     })
 
-    test('only power may write without passive On context, with no query or retry', () => {
+    test('E5 controls require passive On context except power, with no query or retry', () => {
         const { thinq, dev } = makeDevice()
         for (const [key, value] of [
             ['buzzer', 'Low'],
@@ -1822,6 +2049,283 @@ describe('BDVG_FX0003_US confirmed clock display', () => {
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /timed out/)
         dev.drop()
+    })
+})
+
+// Real 2026-11-01 dryer captures cover all twelve melodies: each E6 has one property50
+// result00 and a 42-byte record; each EC has previous + current 42-byte records.
+// Only wire frames are retained here.
+const MELODY_CAPTURES = [
+    {
+        label: 'Arirang',
+        command: buf('aa0df0e5000201ff015009bdbb'),
+        reply: buf(
+            'aa3730e6000201ff0150000003000400070000000029002901000002000003030000002000008103000000090900000000000000003cbb',
+        ),
+        report: buf(
+            'aaff300a006600ed94000100ec0054000300040007000000002900290100000200000303000000200000810300000004090000000000000000000300040007000000002900290100000200000303000000200000810300000009090000000000000000f6b0bb',
+        ),
+    },
+    {
+        label: 'Vivaldi Winter',
+        command: buf('aa0df0e5000201ff015001b5bb'),
+        reply: buf(
+            'aa3730e6000201ff01500000030004000700000000290029010000020000030300000020000081030000000109000000000000000034bb',
+        ),
+        report: buf(
+            'aaff300a006600ed98000100ec005400030004000700000000290029010000020000030300000020000081030000000909000000000000000000030004000700000000290029010000020000030300000020000081030000000109000000000000000033e0bb',
+        ),
+    },
+    {
+        label: 'Breeze',
+        command: buf('aa0df0e5000201ff015004b6bb'),
+        reply: buf(
+            'aa3730e6000201ff01500000030004000700000000290029010000020000030300000020000081030000000409000000000000000031bb',
+        ),
+        report: buf(
+            'aaff300a006600ed9d000100ec00540003000400070000000029002901000002000003030000002000008103000000010900000000000000000003000400070000000029002901000002000003030000002000008103000000040900000000000000009ea1bb',
+        ),
+    },
+    {
+        label: "Bach's Minuet in G major",
+        command: buf('aa0df0e5000201ff015002b4bb'),
+        reply: buf(
+            'aa3730e6000201ff01500000030004000700000000290029010000020000030300000000000081030000000209000000000000000017bb',
+        ),
+        report: buf(
+            'aaff300a006600edc0000100ec0054000300040007000000002900290100000200000303000000000000810300000004090000000000000000000300040007000000002900290100000200000303000000000000810300000002090000000000000000891dbb',
+        ),
+    },
+    {
+        label: 'Beethoven Symphony No. 5',
+        command: buf('aa0df0e5000201ff015008b2bb'),
+        reply: buf(
+            'aa3730e6000201ff0150000003000400070000000029002901000002000003030000000000008103000000080900000000000000001dbb',
+        ),
+        report: buf(
+            'aaff300a006600edc2000100ec00540003000400070000000029002901000002000003030000000000008103000000020900000000000000000003000400070000000029002901000002000003030000000000008103000000080900000000000000004109bb',
+        ),
+    },
+    {
+        label: 'Beethoven Symphony No. 9',
+        command: buf('aa0df0e5000201ff01500bbfbb'),
+        reply: buf(
+            'aa3730e6000201ff01500000030004000700000000290029010000020000030300000000000081030000000b0900000000000000001ebb',
+        ),
+        report: buf(
+            'aaff300a006600edc5000100ec005400030004000700000000290029010000020000030300000000000081030000000809000000000000000000030004000700000000290029010000020000030300000000000081030000000b0900000000000000003e03bb',
+        ),
+    },
+    {
+        label: 'Bubble',
+        command: buf('aa0df0e5000201ff015007b3bb'),
+        reply: buf(
+            'aa3730e6000201ff01500000030004000700000000290029010000020000030300000000000081030000000709000000000000000012bb',
+        ),
+        report: buf(
+            'aaff300a006600edc8000100ec005400030004000700000000290029010000020000030300000000000081030000000b0900000000000000000003000400070000000029002901000002000003030000000000008103000000070900000000000000009c1ebb',
+        ),
+    },
+    {
+        label: 'Normal',
+        command: buf('aa0df0e5000201ff0150008abb'),
+        reply: buf(
+            'aa3730e6000201ff01500000030004000700000000290029010000020000030300000000000081030000000009000000000000000015bb',
+        ),
+        report: buf(
+            'aaff300a006600edca000100ec0054000300040007000000002900290100000200000303000000000000810300000007090000000000000000000300040007000000002900290100000200000303000000000000810300000000090000000000000000c0d2bb',
+        ),
+    },
+    {
+        label: 'Old MacDonald',
+        command: buf('aa0df0e5000201ff015005b1bb'),
+        reply: buf(
+            'aa3730e6000201ff01500000030004000700000000290029010000020000030300000000000081030000000509000000000000000010bb',
+        ),
+        report: buf(
+            'aaff300a006600edcd000100ec0054000300040007000000002900290100000200000303000000000000810300000000090000000000000000000300040007000000002900290100000200000303000000000000810300000005090000000000000000a065bb',
+        ),
+    },
+    {
+        label: "Pachelbel's Canon",
+        command: buf('aa0df0e5000201ff01500abcbb'),
+        reply: buf(
+            'aa3730e6000201ff01500000030004000700000000290029010000020000030300000000000081030000000a0900000000000000001fbb',
+        ),
+        report: buf(
+            'aaff300a006600edcf000100ec005400030004000700000000290029010000020000030300000000000081030000000509000000000000000000030004000700000000290029010000020000030300000000000081030000000a09000000000000000027c1bb',
+        ),
+    },
+    {
+        label: 'Sweet Home',
+        command: buf('aa0df0e5000201ff015003b7bb'),
+        reply: buf(
+            'aa3730e6000201ff01500000030004000700000000290029010000020000030300000000000081030000000309000000000000000016bb',
+        ),
+        report: buf(
+            'aaff300a006600edd2000100ec005400030004000700000000290029010000020000030300000000000081030000000a090000000000000000000300040007000000002900290100000200000303000000000000810300000003090000000000000000cb0cbb',
+        ),
+    },
+    {
+        label: 'Verdi La Traviata Drinking Song',
+        command: buf('aa0df0e5000201ff015006b0bb'),
+        reply: buf(
+            'aa3730e6000201ff01500000030004000700000000290029010000020000030300000000000081030000000609000000000000000013bb',
+        ),
+        report: buf(
+            'aaff300a006600edd4000100ec005400030004000700000000290029010000020000030300000000000081030000000309000000000000000000030004000700000000290029010000020000030300000000000081030000000609000000000000000061c3bb',
+        ),
+    },
+]
+
+describe('BDVG_FX0003_US ending melody', () => {
+    test('config select uses the shared twelve melody names without optimistic state', () => {
+        const { ha, dev } = makeDevice()
+        dev.publishConfig()
+        const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        assert.deepEqual(components.melody, {
+            platform: 'select',
+            unique_id: '$deviceid-melody',
+            state_topic: '$this/melody',
+            command_topic: '$this/melody/set',
+            retain: false,
+            optimistic: false,
+            options: ENDING_MELODY.options,
+            name: 'Ending melody',
+            icon: 'mdi:music-note',
+            entity_category: 'config',
+        })
+        assert.equal(ENDING_MELODY.options.length, 12)
+    })
+
+    test('all twelve options send one property50 command with no requested-value echo', () => {
+        for (const [value, label] of ENDING_MELODY.options.entries()) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', EB_CONNECT)
+            dev.setProperty('melody', label)
+            const expected = Buffer.from([0xaa, 13, 0xf0, 0xe5, 0, 2, 1, 0xff, 1, 0x50, value, 0, 0xbb])
+            expected[11] = (expected.subarray(0, -2).reduce((a, b) => a + b, 0) & 0xff) ^ 0x55
+            assert.deepEqual(thinq.outbox, [expected], label)
+            assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal')
+            assert.deepEqual(
+                thinq.sent.filter((message) => message.cmd !== 'ack'),
+                [],
+            )
+            dev.drop()
+        }
+    })
+
+    test('all twelve captured E6 replies publish actual record32 and EC reports use the last42 record', () => {
+        for (const { label, command, reply, report } of MELODY_CAPTURES) {
+            const { ha, thinq, dev } = makeDevice()
+            const before = Buffer.from(EB_CONNECT.subarray(15, 57))
+            before[32] = (reply[11 + 32] + 1) % 12
+            thinq.emit('data', longFrame(0xeb, before))
+            dev.setProperty('melody', label)
+            assert.deepEqual(thinq.outbox, [command])
+            assert.equal(ha.devices[DEVICE_ID].properties.melody, ENDING_MELODY.map(before[32]))
+            assert.equal(reply.length, 55)
+            assert.equal(reply[10], 0) // captured result00
+            thinq.emit('data', reply)
+            const p = ha.devices[DEVICE_ID].properties
+            assert.equal(p.melody, label)
+            assert.equal(p.splash_screen, 'Snowman 1') // unrelated reply fields are not feedback
+            assert.equal(p.buzzer, 'Very High')
+            dev.drop()
+
+            const passive = makeDevice()
+            assert.equal(report.length, 102)
+            assert.equal(report.readUInt16BE(13), 84)
+            assert.equal(crc16(report.subarray(0, -3)), report.readUInt16BE(report.length - 3))
+            assert.notEqual(report[15 + 32], report[15 + 42 + 32])
+            passive.thinq.emit('data', report)
+            const actual = passive.ha.devices[DEVICE_ID].properties
+            assert.equal(actual.melody, label)
+            assert.equal(actual.splash_screen, 'Halloween') // byte33 remains independent
+            assert.equal(actual.buzzer, 'High')
+            passive.dev.drop()
+        }
+    })
+
+    test('missing, stale and refused records never echo; passive report publishes actual not requested', () => {
+        for (const variant of ['absent', 'stale', 'refused']) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', EB_CONNECT)
+            dev.setProperty('melody', 'Breeze')
+            const rec = Buffer.from(MELODY_CAPTURES[variant === 'refused' ? 2 : 1].reply.subarray(11, -2))
+            thinq.emit(
+                'data',
+                writeReply(
+                    thinq.outbox[0],
+                    variant === 'absent' ? undefined : rec,
+                    new Map(variant === 'refused' ? [[0x50, 3]] : []),
+                ),
+            )
+            assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal')
+            thinq.emit('data', MELODY_CAPTURES[1].report)
+            assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Vivaldi Winter')
+            assert.equal(thinq.outbox.length, 1)
+            dev.drop()
+        }
+    })
+
+    test('invalid labels and absent/Off status do not send commands or power on', () => {
+        const { thinq, dev } = makeDevice()
+        dev.setProperty('melody', 'Breeze')
+        thinq.emit('data', EB_CONNECT)
+        for (const value of ['', '4', 'breeze', ' Breeze', 'ON', 'Unknown']) dev.setProperty('melody', value)
+        thinq.emit('data', OFF_AFTER_END)
+        dev.setProperty('melody', 'Breeze')
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(
+            thinq.sent.filter((message) => message.cmd !== 'ack'),
+            [],
+        )
+        dev.drop()
+    })
+
+    test('wrong-property reply cannot settle melody or publish the requested value', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_CONNECT)
+        dev.setProperty('melody', 'Breeze')
+        dev.setProperty('melody', 'Vivaldi Winter')
+        const wrong = Buffer.from(thinq.outbox[0])
+        wrong[9] = 0x51
+        thinq.emit('data', writeReply(wrong, MELODY_CAPTURES[2].reply.subarray(11, -2)))
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal')
+        thinq.emit('data', MELODY_CAPTURES[2].reply)
+        assert.equal(thinq.outbox.length, 2)
+        assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal') // newer pending intent wins
+        thinq.emit('data', MELODY_CAPTURES[1].reply)
+        assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Vivaldi Winter')
+        dev.drop()
+    })
+
+    test('feedback is bounded and course/Off boundaries reject late prior-generation replies', (t) => {
+        t.mock.timers.enable({ apis: ['Date'] })
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', EB_CONNECT)
+        dev.setProperty('melody', 'Breeze')
+        thinq.emit('data', MELODY_CAPTURES[2].reply)
+        thinq.emit('data', EB_CONNECT)
+        assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Breeze')
+        t.mock.timers.tick(30_001)
+        thinq.emit('data', EB_CONNECT)
+        assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
+        dev.drop()
+
+        for (const boundary of [DIAL_NORMAL, OFF_AFTER_END]) {
+            const late = makeDevice()
+            late.thinq.emit('data', EB_CONNECT)
+            late.dev.setProperty('melody', 'Breeze')
+            late.thinq.emit('data', boundary)
+            late.thinq.emit('data', MELODY_CAPTURES[2].reply)
+            assert.equal(late.ha.devices[DEVICE_ID].properties.melody, 'Normal')
+            assert.equal(late.thinq.outbox.length, 1)
+            late.dev.drop()
+        }
     })
 })
 

@@ -6,6 +6,7 @@ import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import AABBDevice, { type AwaitedWrite } from './aabb_device'
 import { Enum } from '@/util/enum'
+import { ENDING_MELODY } from './ending_melody'
 import crc16 from '@/util/crc16'
 
 // LG WM6700HBA front-load washer. FAFXU25006's framing, but a 51-byte record and different
@@ -79,6 +80,7 @@ const PROP_COURSE = 0x0a // 0xff, then PROP_DOWNLOADED_COURSE, for a downloaded 
 const PROP_DOWNLOADED_COURSE = 0x0b
 const PROP_BUZZER = 0x13
 const PROP_CYCLE_OPTIMIZATION = 0x4c
+const PROP_MELODY = 0x50
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_QUICK_LOAD_SENSE = 0x56
 const PROP_CLOCK_DISPLAY = 0x58
@@ -158,6 +160,7 @@ const SOFTENER_LEVEL_OFFSET = 31
 const DETERGENT_AMOUNT_OFFSET = 32 // mL
 const SOFTENER_AMOUNT_OFFSET = 33 // mL
 const DOOR_LOCK_OFFSET = 38
+const MELODY_OFFSET = 45
 const SPLASH_SCREEN_OFFSET = 46
 const SOFTENER_TANK_USE_OFFSET = 48
 
@@ -365,6 +368,7 @@ const RECORD_PROPERTIES = [
     { prop: 0x13, key: 'buzzer', offset: 29 },
     { prop: 0x4c, key: 'cycle_optimization', offset: 40, mask: 0x08 },
     { prop: 0x56, key: 'quick_load_sense', offset: 50, mask: 0x04 },
+    { prop: PROP_MELODY, key: 'melody', offset: MELODY_OFFSET },
     { prop: 0x51, key: 'splash_screen', offset: 46 },
     { prop: PROP_CLOCK_DISPLAY, key: 'clock_display', offset: CLOCK_DISPLAY_OFFSET, mask: CLOCK_DISPLAY_MASK },
 ] as const
@@ -809,6 +813,18 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:clock-outline',
                         entity_category: 'config',
                     },
+                    melody: {
+                        platform: 'select',
+                        unique_id: '$deviceid-melody',
+                        state_topic: '$this/melody',
+                        command_topic: '$this/melody/set',
+                        options: ENDING_MELODY.options,
+                        retain: false,
+                        optimistic: false,
+                        name: 'Ending melody',
+                        icon: 'mdi:music-note',
+                        entity_category: 'config',
+                    },
                     splash_screen: {
                         platform: 'select',
                         unique_id: '$deviceid-splash_screen',
@@ -1126,6 +1142,9 @@ export default class Device extends AABBDevice {
             this.writeProps(p, value === 'ON' ? 1 : 0)
         } else if (prop === 'remote_maintain') {
             if (value === 'ON' || value === 'OFF') this.writeCommand(COMMAND_REMOTE_MAINTAIN, value === 'ON' ? 1 : 0)
+        } else if (prop === 'melody') {
+            const idx = ENDING_MELODY.unmap(value)
+            if (idx !== undefined) this.writeProps(PROP_MELODY, idx)
         } else if (prop === 'splash_screen') {
             const idx = SPLASH_SCREEN.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_SPLASH_SCREEN, idx)
@@ -1268,6 +1287,7 @@ export default class Device extends AABBDevice {
                 soil: SOIL,
                 rinse: RINSE,
                 buzzer: BUZZER,
+                melody: ENDING_MELODY,
                 splash_screen: SPLASH_SCREEN,
             }
             const setting = settings[field.key]
@@ -1414,6 +1434,7 @@ export default class Device extends AABBDevice {
         this.publishProperty('drawer', (rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) !== 0 ? 'OFF' : 'ON')
         this.publishProperty('quick_load_sense', onOff((rec[OPT7_OFFSET] & OPT7_QUICK_LOAD_SENSE) !== 0))
         this.publishProperty('clock_display', onOff((rec[CLOCK_DISPLAY_OFFSET] & CLOCK_DISPLAY_MASK) !== 0))
+        this.publishProperty('melody', ENDING_MELODY.map(rec[MELODY_OFFSET]))
         this.publishProperty('splash_screen', SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]))
         this.publishingRecord = false
     }
