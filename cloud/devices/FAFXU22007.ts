@@ -851,7 +851,7 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-remote_maintain',
                         state_topic: '$this/remote_maintain',
                         command_topic: '$this/remote_maintain/set',
-                        name: 'Remote maintain',
+                        name: 'Keep Remote Start On',
                         icon: 'mdi:remote',
                         entity_category: 'config',
                     },

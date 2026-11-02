@@ -766,7 +766,7 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/washer/remote_maintain/set',
                         payload_on: 'ON',
                         payload_off: 'OFF',
-                        name: 'Washer keep remote start',
+                        name: 'Washer Keep Remote Start On',
                         icon: 'mdi:remote',
                         availability: [
                             { topic: '$this/washer/power', payload_available: 'ON', payload_not_available: 'OFF' },
@@ -806,7 +806,7 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/dryer/remote_maintain/set',
                         payload_on: 'ON',
                         payload_off: 'OFF',
-                        name: 'Dryer keep remote start',
+                        name: 'Dryer Keep Remote Start On',
                         icon: 'mdi:remote',
                         availability: [
                             { topic: '$this/dryer/power', payload_available: 'ON', payload_not_available: 'OFF' },
