@@ -512,6 +512,9 @@ export default class Device extends AABBDevice {
                     },
                     current_time_display: {
                         platform: 'switch',
+                        device_class: 'switch',
+                        retain: false,
+                        optimistic: false,
                         unique_id: '$deviceid-current_time_display',
                         state_topic: '$this/current_time_display',
                         command_topic: '$this/current_time_display/set',
@@ -679,6 +682,7 @@ export default class Device extends AABBDevice {
             [PROP_BUZZER, rec[BUZZER_OFFSET]],
             [PROP_SPLASH_SCREEN, rec[SPLASH_SCREEN_OFFSET]],
             [PROP_KEEP_FRESH, bit(rec[OPT5_OFFSET], OPT5_KEEP_FRESH)],
+            [PROP_CURRENT_TIME_DISPLAY, bit(rec[OPT5_OFFSET], OPT5_CURRENT_TIME_DISPLAY)],
             [PROP_CYCLE_OPTIMIZATION, bit(rec[OPT4_OFFSET], OPT4_CYCLE_OPTIMIZATION)],
             ...BUNDLE.map(
                 ({ prop, key }) =>
@@ -1020,6 +1024,7 @@ export default class Device extends AABBDevice {
         } else if (prop === PROP_BUZZER) this.publishProperty('buzzer', BUZZER.map(raw))
         else if (prop === PROP_SPLASH_SCREEN) this.publishProperty('splash_screen', SPLASH_SCREEN.map(raw))
         else if (prop === PROP_KEEP_FRESH) this.publishProperty('keep_fresh', onOff(raw !== 0))
+        else if (prop === PROP_CURRENT_TIME_DISPLAY) this.publishProperty('current_time_display', onOff(raw !== 0))
         else if (prop === PROP_CYCLE_OPTIMIZATION) this.publishProperty('cycle_optimization', onOff(raw !== 0))
     }
 
@@ -1164,7 +1169,12 @@ export default class Device extends AABBDevice {
             onOff((rec[OPT4_OFFSET] & OPT4_CYCLE_OPTIMIZATION) !== 0),
         )
         this.publishProperty('remote_maintain', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_MAINTAIN) !== 0))
-        this.publishProperty('current_time_display', onOff((rec[OPT5_OFFSET] & OPT5_CURRENT_TIME_DISPLAY) !== 0))
+        this.publishSetting(
+            PROP_CURRENT_TIME_DISPLAY,
+            'current_time_display',
+            bit(rec[OPT5_OFFSET], OPT5_CURRENT_TIME_DISPLAY),
+            onOff((rec[OPT5_OFFSET] & OPT5_CURRENT_TIME_DISPLAY) !== 0),
+        )
         this.publishSetting(
             87,
             'keep_fresh',

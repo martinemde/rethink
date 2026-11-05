@@ -371,6 +371,12 @@ const RECORD_PROPERTIES = [
     { prop: 0x4c, key: 'cycle_optimization', offset: 40, mask: 0x08 },
     { prop: 0x56, key: 'quick_load_sense', offset: 50, mask: 0x04 },
     { prop: 0x51, key: 'splash_screen', offset: 46 },
+    {
+        prop: PROP_CURRENT_TIME_DISPLAY,
+        key: 'current_time_display',
+        offset: CURRENT_TIME_DISPLAY_OFFSET,
+        mask: CURRENT_TIME_DISPLAY_MASK,
+    },
 ] as const
 
 function recordValue(rec: Buffer, field: (typeof RECORD_PROPERTIES)[number]): number {
@@ -800,6 +806,9 @@ export default class Device extends AABBDevice {
                     },
                     current_time_display: {
                         platform: 'switch',
+                        device_class: 'switch',
+                        retain: false,
+                        optimistic: false,
                         unique_id: '$deviceid-current_time_display',
                         state_topic: '$this/current_time_display',
                         command_topic: '$this/current_time_display/set',

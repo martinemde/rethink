@@ -1377,8 +1377,7 @@ describe('FAFXU22007', () => {
         // Synthetic, from EB_IDLE (whose rec[47] is 0): clock on, with Both Tanks set beside it.
         const frame = Buffer.from(EB_IDLE)
         frame[2 + 13 + 47] = 0x80 | 0x60 // AA <len>, envelope header
-        const sum = frame.subarray(0, frame.length - 2).reduce((pv, cv) => pv + cv, 0)
-        frame[frame.length - 2] = (sum & 0xff) ^ 0x55
+        frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
         const p = feed([frame])
         assert.equal(p.current_time_display, 'ON')
         assert.equal(p.nozzle_clean_tank, 'Both Tanks')
@@ -1391,8 +1390,7 @@ describe('FAFXU22007', () => {
         const frame = Buffer.from(END)
         const rec = 2 + 13 + 51 // AA FF, envelope header, previous record
         frame.set([0x01, 0x2c, 0x02, 0x58, 0x01, 0x00, 0x14], rec + 13)
-        const sum = frame.subarray(0, frame.length - 2).reduce((pv, cv) => pv + cv, 0)
-        frame[frame.length - 2] = (sum & 0xff) ^ 0x55
+        frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
         const p = feed([frame])
         assert.equal(p.remaining_time, 300)
         assert.equal(p.initial_time, 600)
@@ -2290,5 +2288,51 @@ describe('FAFXU22007 reconciled controls', () => {
             bad[offset] = 1
             assert.deepEqual(feed([checksum(bad)]), {})
         }
+    })
+})
+
+describe('FAFXU22007 upstream clock reconciliation', () => {
+    test('clock commands require passive On context and retain native discovery identity', () => {
+        const { dev, thinq } = makeDevice()
+        dev.setProperty('current_time_display', 'ON')
+        assert.deepEqual(thinq.outbox, [])
+        const c = dev.config!.components as unknown as Record<string, Record<string, unknown>>
+        assert.equal(c.current_time_display.unique_id, '$deviceid-current_time_display')
+        assert.equal(c.current_time_display.entity_category, 'config')
+        assert.equal(c.current_time_display.device_class, 'switch')
+        assert.equal(c.current_time_display.retain, false)
+        assert.equal(c.current_time_display.optimistic, false)
+    })
+
+    test('clock readback respects newer queued intent, stale records and the 30-second bound', (t) => {
+        t.mock.timers.enable({ apis: ['Date'] })
+        const { ha, thinq, dev } = makeDevice()
+        const rec = Buffer.from(EB_IDLE.subarray(15, 15 + 51))
+        rec[47] &= ~128
+        const off = checksum(Buffer.from(EB_IDLE))
+        rec.copy(off, 15)
+        checksum(off)
+        thinq.emit('data', off)
+        const p = ha.devices[DEVICE_ID].properties
+        dev.setProperty('current_time_display', 'ON')
+        assert.equal(p.current_time_display, 'OFF')
+        dev.setProperty('current_time_display', 'OFF')
+        rec[47] |= 128
+        thinq.emit('data', reply([0x58], rec))
+        assert.equal(p.current_time_display, 'OFF') // newer unsent intent owns publication
+        assert.equal(thinq.outbox[1][9], 0x58)
+        assert.equal(thinq.outbox[1][10], 0)
+        rec[47] &= ~128
+        thinq.emit('data', reply([0x58], rec))
+        dev.setProperty('current_time_display', 'ON')
+        rec[47] |= 128
+        thinq.emit('data', reply([0x58], rec))
+        assert.equal(p.current_time_display, 'ON')
+        thinq.emit('data', off)
+        assert.equal(p.current_time_display, 'ON')
+        t.mock.timers.tick(30_001)
+        thinq.emit('data', off)
+        assert.equal(p.current_time_display, 'OFF')
+        assert.match(String(p.problem_reason), /expired/)
     })
 })
