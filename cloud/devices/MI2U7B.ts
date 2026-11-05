@@ -341,8 +341,7 @@ export default class Device extends AABBDevice {
             this.publishProperty('keep_remote_start', rec[40] & 0x04 ? 'ON' : 'OFF')
             this.publishProperty('melody', Object.entries(MELODIES).find(([, code]) => code === rec[45])?.[0])
             if ([0, 1].includes(update.state_code)) this.completionState = 'unarmed'
-            else if ([11, 12, 14].includes(update.state_code))
-                this.completionState = 'armed'
+            else if ([11, 12, 14].includes(update.state_code)) this.completionState = 'armed'
             this.publishProperty('status', update.status)
             this.publishProperty('total_time', update.total_time)
             this.publishProperty('course', update.course)

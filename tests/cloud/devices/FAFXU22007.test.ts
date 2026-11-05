@@ -46,6 +46,28 @@ describe('FAFXU22007 verified local behavior', () => {
         }
     })
 
+    // Synthetic high bytes test the upstream layout, not additional appliance captures.
+    test('remaining and total time use adjacent big-endian pairs independently of energy', () => {
+        const { ha, thinq } = makeDevice()
+        for (const [remaining, total, energy] of [
+            [60, 60, 1],
+            [59, 60, 256],
+            [255, 256, 258],
+            [256, 300, 513],
+        ]) {
+            const frame = Buffer.from(EB_IDLE)
+            frame[15 + 21] = 11
+            frame.writeUInt16BE(remaining, 15 + 13)
+            frame.writeUInt16BE(total, 15 + 15)
+            frame.writeUInt16BE(energy, 15 + 17)
+            thinq.emit('data', checksum(frame))
+            const p = ha.devices[DEVICE_ID].properties
+            assert.equal(p.remaining_time, remaining)
+            assert.equal(p.initial_time, total)
+            assert.equal(p.energy, energy)
+        }
+    })
+
     test('finish requires an observed active cycle and emits one non-retained event', () => {
         const { ha, thinq } = makeDevice()
         const events: unknown[][] = []

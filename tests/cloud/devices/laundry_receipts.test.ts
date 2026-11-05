@@ -51,7 +51,7 @@ const cases = [
         recordLength: 49,
         stateOffset: 21,
         active: 12,
-        door: Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+        door: Buffer.from([0x0f, 0x0b, 0x01, 0x08, 0x0f, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
         finishLength: 99,
         finish: [12, 11, 1, 8, 12],
         doorKey: 'drawer',
