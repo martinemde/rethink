@@ -65,6 +65,7 @@ const PROP_BUZZER = 0x13
 const PROP_CYCLE_OPTIMIZATION = 0x4c // switching it on moves the course to AI Dry
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_KEEP_FRESH = 0x57
+const PROP_CURRENT_TIME_DISPLAY = 0x58 // modelJSON currentTimeDisplay, as on FAFXU22007
 
 const COURSE_DOWNLOADED = 0xff
 const CYCLE = Enum.of({ start: 1, pause: 2, resume: 3 })
@@ -149,6 +150,10 @@ const OPT4_REMOTE_MAINTAIN = 0x02
 
 const OPT5_OFFSET = 28
 const OPT5_KEEP_FRESH = 0x10
+// The standby screen's clock, as on FAFXU22007. The clock is a ThinQ UP feature: content DR-9 in the dryer's 0x86
+// content list (the modelJSON's upgradableNewBadge says WM-8, which this dryer refuses). Without it installed the
+// setting still switches, and the screen shows --:--.
+const OPT5_CURRENT_TIME_DISPLAY = 0x20
 
 const STATE_POWEROFF = 0
 
@@ -464,6 +469,15 @@ export default class Device extends AABBDevice {
                         name: 'KeepFresh',
                         icon: 'mdi:rotate-3d-variant',
                     },
+                    current_time_display: {
+                        platform: 'switch',
+                        unique_id: '$deviceid-current_time_display',
+                        state_topic: '$this/current_time_display',
+                        command_topic: '$this/current_time_display/set',
+                        name: 'Clock on standby',
+                        icon: 'mdi:clock-outline',
+                        entity_category: 'config',
+                    },
                     cycle_optimization: {
                         platform: 'switch',
                         unique_id: '$deviceid-cycle_optimization',
@@ -483,10 +497,10 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:monitor-shimmer',
                         entity_category: 'config',
                     },
-                    control_lock: {
+                    child_lock: {
                         platform: 'binary_sensor',
-                        unique_id: '$deviceid-control_lock',
-                        state_topic: '$this/control_lock',
+                        unique_id: '$deviceid-child_lock',
+                        state_topic: '$this/child_lock',
                         name: 'Control lock',
                         icon: 'mdi:lock-outline',
                         entity_category: 'diagnostic',
@@ -639,6 +653,8 @@ export default class Device extends AABBDevice {
                 return
             if (this.course?.on && this.course.code !== COURSE_TIMED_DRY) return this.setProblem(DRY_TIME_REASON)
             this.writeBundle('dry_time', minutes)
+        } else if (prop === 'current_time_display') {
+            if (value === 'ON' || value === 'OFF') this.writeProps(PROP_CURRENT_TIME_DISPLAY, value === 'ON' ? 1 : 0)
         } else if (prop === 'cycle_optimization' || prop === 'keep_fresh') {
             if (value !== 'ON' && value !== 'OFF') return
             this.writeProps(prop === 'keep_fresh' ? PROP_KEEP_FRESH : PROP_CYCLE_OPTIMIZATION, value === 'ON' ? 1 : 0)
@@ -778,11 +794,12 @@ export default class Device extends AABBDevice {
         this.publishProperty('damp_dry_signal', onOff((rec[OPT1_OFFSET] & OPT1_DAMP_DRY_SIGNAL) !== 0))
         this.publishProperty('steam', onOff((rec[OPT2_OFFSET] & OPT2_STEAM) !== 0))
         this.publishProperty('energy_saver', onOff((rec[OPT2_OFFSET] & OPT2_ENERGY_SAVER) !== 0))
-        this.publishProperty('control_lock', onOff((rec[OPT3_OFFSET] & OPT3_CONTROL_LOCK) !== 0))
+        this.publishProperty('child_lock', onOff((rec[OPT3_OFFSET] & OPT3_CONTROL_LOCK) !== 0))
         this.publishProperty('remote_start', onOff((rec[OPT3_OFFSET] & OPT3_REMOTE_START) !== 0))
         this.publishProperty('cycle_optimization', onOff((rec[OPT4_OFFSET] & OPT4_CYCLE_OPTIMIZATION) !== 0))
         this.publishProperty('remote_maintain', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_MAINTAIN) !== 0))
         this.publishProperty('keep_fresh', onOff((rec[OPT5_OFFSET] & OPT5_KEEP_FRESH) !== 0))
+        this.publishProperty('current_time_display', onOff((rec[OPT5_OFFSET] & OPT5_CURRENT_TIME_DISPLAY) !== 0))
         this.publishProperty('splash_screen', SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]))
     }
 }

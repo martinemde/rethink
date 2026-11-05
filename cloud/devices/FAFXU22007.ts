@@ -80,6 +80,7 @@ const PROP_BUZZER = 0x13
 const PROP_CYCLE_OPTIMIZATION = 0x4c
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_QUICK_LOAD_SENSE = 0x56
+const PROP_CURRENT_TIME_DISPLAY = 0x58 // modelJSON currentTimeDisplay
 
 const COURSE_DOWNLOADED = 0xff
 const CYCLE = Enum.of({ start: 1, pause: 2, resume: 3 })
@@ -146,10 +147,13 @@ const TEMP_OFFSET = 2
 const RINSE_OFFSET = 3
 const SPIN_OFFSET = 4
 const COURSE_OFFSET = 5
-const RESERVE_TIME_OFFSET = 11 // minutes, big-endian unlike the other counts
-const REMAIN_TIME_OFFSET = 14
-const INITIAL_TIME_OFFSET = 16
-const SPENT_POWER_OFFSET = 18 // Wh, cleared at power-on
+// The counts are big-endian, as on the dryer: an energy reading of 256 Wh is 01 00 at rec[17]. Read as
+// little-endian one byte later, they come out the same until a count passes 255, and rec[19] is another
+// field (0x14 in APP_01, at 0 Wh).
+const RESERVE_TIME_OFFSET = 11 // minutes
+const REMAIN_TIME_OFFSET = 13 // minutes
+const INITIAL_TIME_OFFSET = 15 // minutes
+const SPENT_POWER_OFFSET = 17 // Wh, cleared at power-on
 const LOADED_COURSE_OFFSET = 20 // = rec[5], except where rec[5] is 0xff (a downloaded course)
 const STATE_OFFSET = 21
 const TUB_CLEAN_COUNT_OFFSET = 28
@@ -164,6 +168,11 @@ const SOFTENER_TANK_USE_OFFSET = 48
 
 const NOZZLE_CLEAN_OFFSET = 47
 const NOZZLE_CLEAN_MASK = 0x60
+// The standby screen's clock, shown while the washer is off. The clock is a ThinQ UP feature (content WM-8 in
+// the washer's 0x86 content list); the setting can be switched on without it installed, and the screen
+// then shows --:--.
+const CURRENT_TIME_DISPLAY_OFFSET = 47
+const CURRENT_TIME_DISPLAY_MASK = 0x80
 
 const OPT1_OFFSET = 34
 const OPT1_COLD_WASH = 0x04
@@ -644,6 +653,15 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:scale',
                         entity_category: 'config',
                     },
+                    current_time_display: {
+                        platform: 'switch',
+                        unique_id: '$deviceid-current_time_display',
+                        state_topic: '$this/current_time_display',
+                        command_topic: '$this/current_time_display/set',
+                        name: 'Clock on standby',
+                        icon: 'mdi:clock-outline',
+                        entity_category: 'config',
+                    },
                     splash_screen: {
                         platform: 'select',
                         unique_id: '$deviceid-splash_screen',
@@ -799,9 +817,14 @@ export default class Device extends AABBDevice {
                 minutes % RESERVE_TIME_STEP === 0
             )
                 this.writeBundle('reserve_time', minutes)
-        } else if (prop === 'cycle_optimization' || prop === 'quick_load_sense') {
+        } else if (prop === 'cycle_optimization' || prop === 'quick_load_sense' || prop === 'current_time_display') {
             if (value !== 'ON' && value !== 'OFF') return
-            const p = prop === 'quick_load_sense' ? PROP_QUICK_LOAD_SENSE : PROP_CYCLE_OPTIMIZATION
+            const p =
+                prop === 'quick_load_sense'
+                    ? PROP_QUICK_LOAD_SENSE
+                    : prop === 'current_time_display'
+                      ? PROP_CURRENT_TIME_DISPLAY
+                      : PROP_CYCLE_OPTIMIZATION
             this.writeProps(p, value === 'ON' ? 1 : 0)
         } else if (prop === 'remote_maintain') {
             if (value === 'ON' || value === 'OFF') this.writeCommand(COMMAND_REMOTE_MAINTAIN, value === 'ON' ? 1 : 0)
@@ -889,9 +912,9 @@ export default class Device extends AABBDevice {
         this.publishProperty('spin', SPIN.map(rec[SPIN_OFFSET]))
         this.publishProperty('temp', TEMP.map(rec[TEMP_OFFSET]))
         this.publishProperty('rinse', RINSE.map(rec[RINSE_OFFSET]))
-        this.publishProperty('remaining_time', isOff ? 0 : rec.readUInt16LE(REMAIN_TIME_OFFSET))
-        this.publishProperty('initial_time', isOff ? 0 : rec.readUInt16LE(INITIAL_TIME_OFFSET))
-        this.publishProperty('energy', rec.readUInt16LE(SPENT_POWER_OFFSET))
+        this.publishProperty('remaining_time', isOff ? 0 : rec.readUInt16BE(REMAIN_TIME_OFFSET))
+        this.publishProperty('initial_time', isOff ? 0 : rec.readUInt16BE(INITIAL_TIME_OFFSET))
+        this.publishProperty('energy', rec.readUInt16BE(SPENT_POWER_OFFSET))
         this.publishProperty('reserve_time', rec.readUInt16BE(RESERVE_TIME_OFFSET))
         this.publishProperty('delay_start', (rec[OPT5_OFFSET] & OPT5_DELAY_START) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('tub_clean_count', rec[TUB_CLEAN_COUNT_OFFSET])
@@ -915,5 +938,9 @@ export default class Device extends AABBDevice {
         this.publishProperty('door_lock', rec[DOOR_LOCK_OFFSET] !== 0 ? 'ON' : 'OFF')
         this.publishProperty('quick_load_sense', onOff((rec[OPT7_OFFSET] & OPT7_QUICK_LOAD_SENSE) !== 0))
         this.publishProperty('splash_screen', SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]))
+        this.publishProperty(
+            'current_time_display',
+            onOff((rec[CURRENT_TIME_DISPLAY_OFFSET] & CURRENT_TIME_DISPLAY_MASK) !== 0),
+        )
     }
 }

@@ -791,6 +791,11 @@ const APPW_003818 = buf('aa0df0e5000201ff015600b0bb')
 // 00:38:30 UTC 09-25, the ThinQ app writing quick_load_sense = ON.
 const APPW_003830 = buf('aa0df0e5000201ff015601b3bb')
 
+// The ThinQ app writing current_time_display = OFF and ON, captured by another WM6700HBA owner on firmware
+// 2.11.258 (PR #204).
+const APPW_CLOCK_OFF = buf('aa0df0e5000201ff015800b2bb')
+const APPW_CLOCK_ON = buf('aa0df0e5000201ff015801bdbb')
+
 // 00:39:14 UTC 09-25, the ThinQ app writing cycle_optimization = OFF.
 const APPW_003914 = buf('aa0df0e5000201ff014c008ebb')
 
@@ -1021,6 +1026,7 @@ describe('FAFXU22007', () => {
             door_lock: 'OFF',
             quick_load_sense: 'ON',
             splash_screen: 'Normal',
+            current_time_display: 'OFF',
         })
     })
 
@@ -1227,6 +1233,32 @@ describe('FAFXU22007', () => {
         assert.equal(p.initial_time, 0)
     })
 
+    test('the standby clock reads from rec[47] bit 0x80, apart from the nozzle-clean bits', () => {
+        // Synthetic, from EB_IDLE (whose rec[47] is 0): clock on, with Both Tanks set beside it.
+        const frame = Buffer.from(EB_IDLE)
+        frame[2 + 13 + 47] = 0x80 | 0x60 // AA <len>, envelope header
+        const sum = frame.subarray(0, frame.length - 2).reduce((pv, cv) => pv + cv, 0)
+        frame[frame.length - 2] = (sum & 0xff) ^ 0x55
+        const p = feed([frame])
+        assert.equal(p.current_time_display, 'ON')
+        assert.equal(p.nozzle_clean_tank, 'Both Tanks')
+        assert.equal(feed([EB_IDLE]).current_time_display, 'OFF')
+    })
+
+    test('times and energy are big-endian', () => {
+        // Synthetic, from END: 300 min remaining of 600, 256 Wh, and rec[19] (another field) nonzero. Read
+        // as little-endian one byte later, these would come out as 556 min, 344 min and 5120 Wh.
+        const frame = Buffer.from(END)
+        const rec = 2 + 13 + 51 // AA FF, envelope header, previous record
+        frame.set([0x01, 0x2c, 0x02, 0x58, 0x01, 0x00, 0x14], rec + 13)
+        const sum = frame.subarray(0, frame.length - 2).reduce((pv, cv) => pv + cv, 0)
+        frame[frame.length - 2] = (sum & 0xff) ^ 0x55
+        const p = feed([frame])
+        assert.equal(p.remaining_time, 300)
+        assert.equal(p.initial_time, 600)
+        assert.equal(p.energy, 256)
+    })
+
     test('power-on answers with a fresh snapshot and a reset energy counter', () => {
         const p = feed([OFF_AFTER_END, EB_POWER_ON])
         assert.equal(p.status, 'Initial')
@@ -1374,6 +1406,7 @@ describe('FAFXU22007', () => {
             ['fresh_care', 'switch'],
             ['cycle_optimization', 'switch'],
             ['quick_load_sense', 'switch'],
+            ['current_time_display', 'switch'],
             ['remote_maintain', 'switch'],
             ['splash_screen', 'select'],
             ['start', 'button'],
@@ -1422,6 +1455,8 @@ describe('FAFXU22007', () => {
             ['reserve_time', '0', APPW_003747, REC_003732],
             ['quick_load_sense', 'OFF', APPW_003818, undefined],
             ['quick_load_sense', 'ON', APPW_003830, undefined],
+            ['current_time_display', 'OFF', APPW_CLOCK_OFF, undefined],
+            ['current_time_display', 'ON', APPW_CLOCK_ON, undefined],
             ['cycle_optimization', 'OFF', APPW_003914, undefined],
             ['cycle_optimization', 'ON', APPW_003919, undefined],
             ['splash_screen', 'Snowman 1', APPW_003939, undefined],

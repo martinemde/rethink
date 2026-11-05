@@ -591,6 +591,17 @@ const APP_CHIME = [
     'aa0df0e5000201ff011304f3bb',
 ]
 
+// The standby clock, prop 0x58 as on FAFXU22007, written from rethink 2026-11-05 02:59 UTC: on, then off. Each answered 00, and the
+// next record has rec[28] bit 0x20 set, then clear (0x03 <-> 0x23).
+const W_CLOCK_ON = buf('aa0df0e5000201ff015801bdbb')
+const W_CLOCK_OFF = buf('aa0df0e5000201ff015800b2bb')
+const REC_CLOCK_ON = buf(
+    'aaff300a006600b50a000100ec005400000000000000000000290029010000020000040000000020000081030000000208000000000000000000000000000000000000290029010000020000040000000020000081230000000208000000000000000020c9bb',
+)
+const REC_CLOCK_OFF = buf(
+    'aaff300a006600b50e000100ec0054000000000000000000002900290100000200000400000000200000812300000002080000000000000000000000000000000000002900290100000200000400000000200000810300000002080000000000000000aa06bb',
+)
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -626,12 +637,13 @@ describe('BDVG_FX0003_US', () => {
             wrinkle_care: 'OFF',
             damp_dry_signal: 'OFF',
             steam: 'OFF',
-            control_lock: 'OFF',
+            child_lock: 'OFF',
             remote_start: 'OFF',
             cycle_optimization: 'ON',
             remote_maintain: 'OFF',
             energy_saver: 'OFF',
             keep_fresh: 'OFF',
+            current_time_display: 'OFF',
             splash_screen: 'Snowman 1', // what the app showed until it was changed on 09-25
         })
     })
@@ -715,7 +727,7 @@ describe('BDVG_FX0003_US', () => {
         const cases: [Buffer, Buffer, string][] = [
             [DRUM_LIGHT_ON, DRUM_LIGHT_OFF, 'drum_light'],
             [REMOTE_START_ON, REMOTE_START_OFF, 'remote_start'],
-            [CONTROL_LOCK_ON, CONTROL_LOCK_OFF, 'control_lock'],
+            [CONTROL_LOCK_ON, CONTROL_LOCK_OFF, 'child_lock'],
             [DAMP_DRY_SIGNAL_ON, DAMP_DRY_SIGNAL_OFF, 'damp_dry_signal'],
             [WRINKLE_CARE_ON, WRINKLE_CARE_OFF, 'wrinkle_care'],
             [STEAM_ON, STEAM_OFF, 'steam'],
@@ -897,6 +909,7 @@ describe('BDVG_FX0003_US', () => {
             ['keep_fresh', 'switch'],
             ['cycle_optimization', 'switch'],
             ['splash_screen', 'select'],
+            ['current_time_display', 'switch'],
             ['start', 'button'],
             ['pause', 'button'],
             ['resume', 'button'],
@@ -1330,5 +1343,20 @@ describe('BDVG_FX0003_US remote maintain', () => {
         assert.equal(c.remote_maintain.command_topic, undefined)
         dev.setProperty('remote_maintain', 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, undefined)
+    })
+
+    test('the standby clock switch writes prop 0x58 and reads rec[28] bit 0x20', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', REC_CLOCK_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.current_time_display, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, 'OFF')
+        thinq.emit('data', REC_CLOCK_ON)
+        assert.equal(ha.devices[DEVICE_ID].properties.current_time_display, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, 'OFF')
+        dev.setProperty('current_time_display', 'ON')
+        assert.deepEqual(thinq.outbox.map(hex), [hex(W_CLOCK_ON)])
+        const second = makeDevice()
+        second.dev.setProperty('current_time_display', 'OFF')
+        assert.deepEqual(second.thinq.outbox.map(hex), [hex(W_CLOCK_OFF)])
     })
 })
