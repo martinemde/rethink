@@ -122,6 +122,39 @@
             .monitor-controls .switch label .lever {
                 margin: 0;
             }
+
+            .monitor-controls .plain-toggle { display: inline-flex; align-items: center; gap: 6px; color: #263238; }
+            .plain-toggle input[type="checkbox"] { position: static; opacity: 1; pointer-events: auto; }
+            .message { float: none !important; color: #17222d !important; background: #f4f8fc !important; padding: 10px; }
+            .tx.message { border-left: 5px solid #785596; }
+            .rx.message { border-left: 5px solid #357aa2; }
+            .message.injected { border-color: #b71c1c; background: #fff1f1 !important; }
+            .packet-header { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+            .packet-title { font-weight: 600; }
+            .packet-time, .packet-meta { font-size: .8rem; color: #455a64; }
+            .packet-raw { font-family: monospace; font-size: .85rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+            .packet-segments { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0; }
+            .packet-segment { display: flex; flex-direction: column; border: 1px solid #a8bccb; border-radius: 4px; padding: 5px 7px; max-width: 100%; }
+            .packet-segment:nth-child(even) { background: #e5eef5; }
+            .packet-segment small { font-size: .75rem; color: #455a64; }
+            .packet-segment code { overflow-wrap: anywhere; }
+            .status-bytes { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 4px; margin-top: 8px; }
+            .status-byte { padding: 6px; border: 1px solid #a8bccb; border-radius: 4px; background: white; }
+            .status-byte.changed { border: 2px solid #b47300; background: #fff4d7; }
+            .status-byte.unknown { border-style: dashed; background: #f0edf4; }
+            .status-byte small { display: block; font-size: .72rem; line-height: 1.25; }
+            .status-byte code { display: block; font-weight: bold; margin: 3px 0; }
+            .packet-warning { color: #a13a17; }
+            .packet-summary { padding: 7px 0; }
+            .packet-decoded table { font-size: .85rem; }
+            .packet-decoded th, .packet-decoded td { padding: 5px 8px; }
+            .message details { margin-top: 7px; }
+            .message summary { cursor: pointer; }
+            #messages.raw-only .packet-decoded { display: none; }
+            #messages.hide-heartbeats .heartbeat { display: none; }
+            .injection-tools { border: 1px solid #b0bec5; border-radius: 5px; padding: 6px 10px; margin-bottom: 8px; }
+            .injection-tools summary { color: #8a3c22; cursor: pointer; }
+            .injection-tools p { font-size: .85rem; }
         </style>
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
         <link
@@ -151,6 +184,10 @@
         <div class="reduced_margins container flex_y flex_grow" style="overflow: hidden">
             <h4 class="header orange-text">Messages</h4>
             <div class="monitor-controls">
+                <label class="plain-toggle"><input id="decode_packets" type="checkbox" checked /> Decode packets</label>
+                <label class="plain-toggle"><input id="hide_heartbeats" type="checkbox" /> Hide heartbeats</label>
+                <button id="clear_messages" class="btn-flat" type="button">Clear</button>
+                <span id="packet_count" aria-live="polite">0 packets</span>
                 <span class="toggle">
                     <label for="autoscroll">Auto-scroll</label>
                     <span class="switch">
@@ -159,6 +196,9 @@
                 </span>
             </div>
             <div class="flex_grow" id="messages"></div>
+            <details class="injection-tools">
+                <summary>Advanced packet injection</summary>
+                <p>Sending can operate the appliance. Injecting a report can change Home Assistant state or trigger automations. Decoding above is passive.</p>
             <div class="flex_x">
                 <div class="input-field flex_grow">
                     <input id="send1" type="text" />
@@ -183,9 +223,10 @@
                     <label for="send2">Inject from device</label>
                 </div>
             </div>
+            </details>
         </div>
 
         <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
-        <script src="monitor.js"></script>
+        <script type="module" src="monitor.js"></script>
     </body>
 </html>
