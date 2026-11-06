@@ -102,6 +102,31 @@ describe('FAFXU22007 verified local behavior', () => {
         )
     })
 
+    test('ezDispense cleaning arms one completion after Standby and suppresses notification retries', () => {
+        const { ha, thinq } = makeDevice()
+        const events: unknown[][] = []
+        const publish = ha.publishProperty.bind(ha)
+        ha.publishProperty = (...args: Parameters<typeof publish>) => {
+            if (args[1] === 'cycle_finished') events.push(args)
+            publish(...args)
+        }
+        thinq.onData(EB_IDLE)
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'Standby')
+        thinq.onData(notification())
+        assert.equal(events.length, 0)
+        thinq.onData(EZDISPENSE_CLEANING)
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'EZDispense cleaning')
+        assert.equal(events.length, 0)
+        for (let i = 0; i < 10; i++) thinq.onData(notification())
+        assert.equal(events.length, 1)
+        assert.deepEqual(events[0].slice(2), [JSON.stringify({ event_type: 'finished' }), { retain: false }])
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(
+            thinq.sent.filter((message) => message.cmd !== 'ack'),
+            [],
+        )
+    })
+
     test('total time is byte16; remote start, lock and drawer have isolated masks', () => {
         const changed = Buffer.from(EB_IDLE)
         changed[15 + 16] = 89
@@ -172,7 +197,7 @@ const DEVICE_ID = 'test-id'
 const MODEL_ID = 'FAFXU22007'
 const META: Metadata = { modelId: MODEL_ID, modelName: MODEL_ID, swVersion: '0.0.0' }
 
-// All fixtures are REAL frames captured from a WM6700HBA between 2026-09-23 and 2026-09-25 UTC, with
+// Unless otherwise dated, fixtures are REAL frames captured from a WM6700HBA between 2026-09-23 and 2026-09-25 UTC, with
 // rethink bridged to the LG cloud. Each comment names the one action that was taken at the panel or in the ThinQ app when that
 // frame went out. Times are UTC.
 
@@ -180,6 +205,12 @@ const META: Metadata = { modelId: MODEL_ID, modelName: MODEL_ID, swVersion: '0.0
 // spin / Medium soil, a 46-minute estimate, 21 washes since the last Tub Clean, chime at Very High.
 const EB_IDLE = buf(
     'aaff200a0045000042000100eb003300030d0e0f2e00000000000000002e002e0000002e01000600000001150402002d1e20000000000c3800000000000004010004553dbb',
+)
+
+// 2026-11-06 20:53:35 UTC, ezDispense Nozzle Clean: captured current record, state48/course128.
+// Converted to a single-record report with sequence/header metadata cleared and CRC recalculated.
+const EZDISPENSE_CLEANING = buf(
+    'aaff200a0045000000000100eb003300000e0e0f800000000000000000150015000000803001110700000116020200301e00000010000c380000000001086401000428ebbb',
 )
 
 // 14:25:21, chime set to Low from the app: rec[29] 0 -> 1.
