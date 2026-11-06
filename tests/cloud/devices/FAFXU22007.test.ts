@@ -1032,12 +1032,57 @@ describe('FAFXU22007', () => {
             remote_maintain: 'OFF',
             door_lock: 'OFF',
             remote_start: 'OFF',
+            low_detergent: 'OFF',
+            low_softener: 'OFF',
             drawer: 'OFF',
             quick_load_sense: 'ON',
             splash_screen: 'Normal',
             current_time_display: 'OFF',
             melody: 'Normal',
         })
+    })
+
+    test('low supply flags are independent of the drawer and use the current EB/EC record', () => {
+        const { ha, thinq, dev } = makeDevice()
+        dev.publishConfig()
+        const c = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        for (const key of ['low_detergent', 'low_softener']) {
+            assert.equal(c[key].platform, 'binary_sensor')
+            assert.equal(c[key].device_class, 'problem')
+            assert.equal(c[key].command_topic, undefined)
+            assert.equal(ha.devices[DEVICE_ID].properties[key], undefined)
+            dev.setProperty(key, 'ON')
+        }
+        assert.notEqual(c.low_detergent.unique_id, c.low_softener.unique_id)
+        // Synthetic variations of existing public fixtures, not physical refill tests.
+        for (const fixture of [EB_IDLE, CHIME_LOW]) {
+            for (let bits = 0; bits < 8; bits++) {
+                const frame = Buffer.from(fixture)
+                const current = fixture === EB_IDLE ? 15 : 15 + 51
+                if (current !== 15) frame[15 + 39] = 0x08 | (bits ^ 7)
+                frame[current + 39] = 0x08 | bits
+                frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
+                thinq.emit('data', frame)
+                const p = ha.devices[DEVICE_ID].properties
+                assert.equal(p.low_softener, bits & 1 ? 'ON' : 'OFF')
+                assert.equal(p.low_detergent, bits & 2 ? 'ON' : 'OFF')
+                assert.equal(p.drawer, bits & 4 ? 'OFF' : 'ON')
+            }
+        }
+        assert.deepEqual(thinq.outbox, [])
+    })
+
+    test('invalid status and unrelated frames do not publish supply warnings', () => {
+        const wrongLength = Buffer.from(EB_IDLE)
+        wrongLength.writeUInt16BE(50, 13)
+        wrongLength.writeUInt16BE(crc16(wrongLength.subarray(0, -3)), wrongLength.length - 3)
+        for (const frame of [EB_IDLE.subarray(0, -1), wrongLength, D8_ZERO, D8_COUNT]) {
+            const { ha, thinq } = makeDevice()
+            thinq.emit('data', frame)
+            assert.equal(ha.devices[DEVICE_ID]?.properties.low_detergent, undefined)
+            assert.equal(ha.devices[DEVICE_ID]?.properties.low_softener, undefined)
+            assert.deepEqual(thinq.outbox, [])
+        }
     })
 
     test('status bits distinguish Remote Start, the door lock and the drawer from neighboring flags', () => {

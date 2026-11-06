@@ -198,6 +198,9 @@ const OPT4_REMOTE_START = 0x10
 const OPT4_CONTROL_LOCK = 0x20
 
 const OPT5_OFFSET = 39
+// Supply-warning flags observed alongside the corresponding panel warnings.
+const OPT5_LOW_SOFTENER = 0x01
+const OPT5_LOW_DETERGENT = 0x02
 const OPT5_DRAWER_CLOSED = 0x04
 const OPT5_DELAY_START = 0x80
 
@@ -485,6 +488,22 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/door',
                         name: 'Door',
                         device_class: 'door',
+                    },
+                    low_detergent: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-low_detergent',
+                        state_topic: '$this/low_detergent',
+                        name: 'Low detergent',
+                        device_class: 'problem',
+                        icon: 'mdi:cup-water',
+                    },
+                    low_softener: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-low_softener',
+                        state_topic: '$this/low_softener',
+                        name: 'Low softener',
+                        device_class: 'problem',
+                        icon: 'mdi:cup-water',
                     },
                     drawer: {
                         platform: 'binary_sensor',
@@ -990,6 +1009,8 @@ export default class Device extends AABBDevice {
         this.publishProperty('remote_maintain', (rec[OPT6_OFFSET] & OPT6_REMOTE_MAINTAIN) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('door_lock', onOff((rec[DOOR_LOCK_OFFSET] & DOOR_LOCK_MASK) !== 0))
         this.publishProperty('remote_start', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_START) !== 0))
+        this.publishProperty('low_softener', onOff((rec[OPT5_OFFSET] & OPT5_LOW_SOFTENER) !== 0))
+        this.publishProperty('low_detergent', onOff((rec[OPT5_OFFSET] & OPT5_LOW_DETERGENT) !== 0))
         this.publishProperty('drawer', onOff((rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) === 0))
         this.publishProperty('quick_load_sense', onOff((rec[OPT7_OFFSET] & OPT7_QUICK_LOAD_SENSE) !== 0))
         this.publishProperty('melody', ENDING_MELODY.map(rec[MELODY_OFFSET]))
