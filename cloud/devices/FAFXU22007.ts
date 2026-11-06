@@ -53,7 +53,8 @@ const DOOR_EVENT_INNER_LEN = 6
 const DOOR_EVENT_BUF_LEN = 13 + DOOR_EVENT_INNER_LEN + 1
 
 const DOOR_EVENT_PREFIX = Buffer.from([0x10, 0x0b, 0x01, 0x0b, 0x10])
-const COMPLETION_PREFIX = Buffer.from([0x08, 0x0b, 0x01, 0x0b, 0x08, 0x02])
+// The following two bytes are a cycle counter, not part of the event signature.
+const COMPLETION_PREFIX = Buffer.from([0x08, 0x0b, 0x01, 0x0b, 0x08])
 const COMPLETION_INNER_LEN = 121
 const DOOR_EVENT_VALUE_OFFSET = 18
 
@@ -1263,7 +1264,7 @@ export default class Device extends AABBDevice {
                 if (
                     innerLen === COMPLETION_INNER_LEN &&
                     buf.length === 13 + COMPLETION_INNER_LEN + 1 &&
-                    buf.subarray(13, 19).equals(COMPLETION_PREFIX)
+                    buf.subarray(13, 18).equals(COMPLETION_PREFIX)
                 ) {
                     if (this.completionState === 'armed') {
                         this.completionState = 'completed'

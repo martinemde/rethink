@@ -635,7 +635,7 @@ function longFrame(opcode: number, payload: Buffer) {
 
 function finishFrame() {
     const payload = Buffer.alloc(28)
-    payload.set([3, 10, 2, 4, 3, 3])
+    payload.set([3, 10, 2, 4, 3])
     return longFrame(3, payload)
 }
 
@@ -1675,7 +1675,7 @@ describe('BDVG_FX0003_US verified local enhancements', () => {
         badPayloadLength[14] -= 1
         for (const packet of [badCRC, badLength, badPayloadLength, EB_CONNECT.subarray(0, -1)]) thinq.onData(packet)
         const payload = Buffer.alloc(28)
-        payload.set([3, 10, 2, 4, 3, 2])
+        payload.set([3, 10, 2, 4, 2])
         thinq.onData(longFrame(3, payload))
         thinq.onData(longFrame(3, Buffer.alloc(27)))
         assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), before)

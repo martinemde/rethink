@@ -17,7 +17,7 @@ function verifiedBuzzer(captured: string) {
     frame[frame.length - 2] = (frame.subarray(0, -2).reduce((a, b) => a + b, 0) & 255) ^ 0x55
     return hex(frame)
 }
-function notification(length = 121, prefix = [8, 11, 1, 11, 8, 2]) {
+function notification(length = 121, prefix = [8, 11, 1, 11, 8]) {
     const frame = Buffer.alloc(length + 18)
     frame.set([0xaa, 0xff, 0x20, 0x0a])
     frame.writeUInt16BE(frame.length, 4)
@@ -89,7 +89,7 @@ describe('FAFXU22007 verified local behavior', () => {
         assert.equal(events.length, 1)
         thinq.onData(RUNNING)
         thinq.onData(notification(120))
-        thinq.onData(notification(121, [8, 11, 1, 11, 8, 3]))
+        thinq.onData(notification(121, [8, 11, 1, 11, 9]))
         assert.equal(events.length, 1)
         thinq.onData(notification())
         assert.equal(events.length, 2)

@@ -949,9 +949,10 @@ export default class Device extends AABBDevice {
             case EVENT_FRAME_TYPE:
                 if (
                     innerLen === 28 &&
+                    // The following two bytes are a cycle counter, not part of the event signature.
                     buf
-                        .subarray(EVENT_PAYLOAD_OFFSET, EVENT_PAYLOAD_OFFSET + 6)
-                        .equals(Buffer.from([0x03, 0x0a, 0x02, 0x04, 0x03, 0x03]))
+                        .subarray(EVENT_PAYLOAD_OFFSET, EVENT_PAYLOAD_OFFSET + 5)
+                        .equals(Buffer.from([0x03, 0x0a, 0x02, 0x04, 0x03]))
                 ) {
                     if (this.completionState === 'armed') {
                         this.completionState = 'completed'

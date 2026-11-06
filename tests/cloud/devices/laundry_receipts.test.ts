@@ -30,7 +30,7 @@ const cases = [
         active: 11,
         door: Buffer.from([0x10, 0x0b, 1, 0x0b, 0x10, 1]),
         finishLength: 121,
-        finish: [8, 11, 1, 11, 8, 2],
+        finish: [8, 11, 1, 11, 8],
         doorKey: 'door',
     },
     {
@@ -42,7 +42,7 @@ const cases = [
         active: 7,
         door: Buffer.from([0x0a, 0x0a, 2, 4, 0x0a, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0]),
         finishLength: 28,
-        finish: [3, 10, 2, 4, 3, 3],
+        finish: [3, 10, 2, 4, 3],
         doorKey: 'door',
     },
     {
@@ -81,6 +81,29 @@ for (const c of cases)
             payload.set(c.finish)
             return frame(c.classByte, 3, payload)
         }
+
+        if (c.modelId !== 'MI2U7B')
+            test('completion accepts variable cycle counters, rejects each signature mutation, and deduplicates retries', (t) => {
+                const { ha, thinq } = setup()
+                const publish = t.mock.method(ha, 'publishProperty')
+                const events = () => publish.mock.calls.filter((call) => call.arguments[1] === 'cycle_finished')
+                for (const [index, counter] of [
+                    0x00ef, 0x00f0, 0x00fa, 0x00ff, 0x0100, 0x0201, 0x0301, 0xffff, 0,
+                ].entries()) {
+                    receive(thinq, active())
+                    const payload = Buffer.alloc(c.finishLength)
+                    payload.set(c.finish)
+                    payload.writeUInt16BE(counter, 5)
+                    for (let byte = 0; byte < c.finish.length; byte++) {
+                        const wrong = Buffer.from(payload)
+                        wrong[byte] ^= 1
+                        receive(thinq, frame(c.classByte, 3, wrong))
+                    }
+                    assert.equal(events().length, index)
+                    for (let retry = 0; retry < 10; retry++) receive(thinq, frame(c.classByte, 3, payload))
+                    assert.equal(events().length, index + 1)
+                }
+            })
 
         test('startup/reconnect never fabricate receipts; validated unknown frames ACK after no-op interpretation', (t) => {
             let now = 1000
