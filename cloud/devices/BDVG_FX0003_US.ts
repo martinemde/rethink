@@ -107,7 +107,8 @@ const COMMAND_TYPE = 0x24
 const COMMAND_REPLY_TYPE = 0x00
 
 const EVENT_FRAME_TYPE = 0x03
-const COMPLETION_PREFIX = Buffer.from([0x03, 0x0a, 0x02, 0x04, 0x03, 0x03])
+// The following two bytes are a cycle counter, not part of the event signature.
+const COMPLETION_PREFIX = Buffer.from([0x03, 0x0a, 0x02, 0x04, 0x03])
 const COMPLETION_INNER_LEN = 28
 const EVENT_INNER_LEN = 18
 const EVENT_PAYLOAD_OFFSET = 13
@@ -721,7 +722,7 @@ export default class Device extends AABBDevice {
                 if (
                     innerLen === COMPLETION_INNER_LEN &&
                     buf.length === 13 + COMPLETION_INNER_LEN + 1 &&
-                    buf.subarray(13, 19).equals(COMPLETION_PREFIX)
+                    buf.subarray(13, 18).equals(COMPLETION_PREFIX)
                 ) {
                     if (this.completionState === 'armed') {
                         this.completionState = 'completed'

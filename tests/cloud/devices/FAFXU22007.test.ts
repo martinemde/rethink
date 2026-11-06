@@ -968,13 +968,14 @@ const APP_CHIME = [
 
 // Sanitized completion signature from local captures; the unexamined body is zeroed.
 // Boundary variants are synthetic and have their lengths and CRC recalculated.
-function completionNotification(length = 121, prefix = [8, 11, 1, 11, 8, 2]) {
+function completionNotification(length = 121, prefix = [8, 11, 1, 11, 8], counter = 0xfa) {
     const frame = Buffer.alloc(length + 18)
     frame.set([0xaa, 0xff, 0x20, 0x0a])
     frame.writeUInt16BE(frame.length, 4)
     frame[12] = 3
     frame.writeUInt16BE(length, 13)
     frame.set(prefix, 15)
+    frame.writeUInt16BE(counter, 20)
     frame[frame.length - 1] = 0xbb
     frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
     return frame
@@ -1848,13 +1849,27 @@ describe('FAFXU22007 completion notifications', () => {
         assert.equal(events().length, 3)
     })
 
-    test('requires the exact event type, length and all six signature bytes', (t) => {
+    test('accepts completion counters independently of the fixed signature', (t) => {
+        const { ha, thinq } = makeDevice()
+        const publish = t.mock.method(ha, 'publishProperty')
+        const counters = [0x00ef, 0x00f0, 0x00fa, 0x00ff, 0x0100, 0x0201, 0x0301, 0xffff, 0x0000]
+        for (const [index, counter] of counters.entries()) {
+            thinq.emit('data', OFF_AFTER_END)
+            thinq.emit('data', RUNNING)
+            const notification = completionNotification(121, undefined, counter)
+            for (let retry = 0; retry < 10; retry++) thinq.emit('data', notification)
+            const events = publish.mock.calls.filter((call) => call.arguments[1] === 'cycle_finished')
+            assert.equal(events.length, index + 1)
+        }
+    })
+
+    test('requires the exact event type, length and all five signature bytes', (t) => {
         const { ha, thinq } = makeDevice()
         const publish = t.mock.method(ha, 'publishProperty')
         const events = () => publish.mock.calls.filter((call) => call.arguments[1] === 'cycle_finished')
         thinq.emit('data', RUNNING)
         for (const length of [120, 122]) thinq.emit('data', completionNotification(length))
-        const prefix = [8, 11, 1, 11, 8, 2]
+        const prefix = [8, 11, 1, 11, 8]
         for (let i = 0; i < prefix.length; i++) {
             const changed = [...prefix]
             changed[i] ^= 1

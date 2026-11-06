@@ -45,7 +45,8 @@ const SINGLE_BUF_LEN = 13 + SINGLE_INNER_LEN + 1
 //     │              └ 1 open, 2 shut
 //     └ id 10: door (11, the panel menu, has the same length)
 const EVENT_FRAME_TYPE = 0x03
-const COMPLETION_PREFIX = Buffer.from([0x08, 0x0b, 0x01, 0x0b, 0x08, 0x02])
+// The following two bytes are a cycle counter, not part of the event signature.
+const COMPLETION_PREFIX = Buffer.from([0x08, 0x0b, 0x01, 0x0b, 0x08])
 const COMPLETION_INNER_LEN = 121
 const DOOR_EVENT_INNER_LEN = 6
 const DOOR_EVENT_BUF_LEN = 13 + DOOR_EVENT_INNER_LEN + 1
@@ -909,7 +910,7 @@ export default class Device extends AABBDevice {
                 if (
                     innerLen === COMPLETION_INNER_LEN &&
                     buf.length === 13 + COMPLETION_INNER_LEN + 1 &&
-                    buf.subarray(13, 19).equals(COMPLETION_PREFIX)
+                    buf.subarray(13, 18).equals(COMPLETION_PREFIX)
                 ) {
                     if (this.completionState === 'armed') {
                         this.completionState = 'completed'
