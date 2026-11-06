@@ -127,20 +127,23 @@ describe('FAFXU22007 verified local behavior', () => {
         )
     })
 
-    test('low detergent bit is independent of the ezDispense drawer', () => {
+    test('low supply flags and drawer are independent read-only problem sensors', () => {
         const { ha, thinq } = makeDevice()
-        for (const [flags, low, drawer] of [
-            [0x08, 'OFF', 'ON'],
-            [0x0a, 'ON', 'ON'],
-            [0x0e, 'ON', 'OFF'],
-            [0x0c, 'OFF', 'OFF'],
-        ] as const) {
+        const c = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        for (const key of ['low_detergent', 'low_softener']) {
+            assert.equal(c[key].platform, 'binary_sensor')
+            assert.equal(c[key].device_class, 'problem')
+            assert.equal(c[key].command_topic, undefined)
+        }
+        assert.notEqual(c.low_detergent.unique_id, c.low_softener.unique_id)
+        for (let bits = 0; bits < 8; bits++) {
             const frame = Buffer.from(EB_IDLE)
-            frame[15 + 39] = flags
+            frame[15 + 39] = 0x08 | bits
             thinq.onData(checksum(frame))
             const p = ha.devices[DEVICE_ID].properties
-            assert.equal(p.low_detergent, low)
-            assert.equal(p.drawer, drawer)
+            assert.equal(p.low_softener, bits & 1 ? 'ON' : 'OFF')
+            assert.equal(p.low_detergent, bits & 2 ? 'ON' : 'OFF')
+            assert.equal(p.drawer, bits & 4 ? 'OFF' : 'ON')
         }
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(thinq.sent.filter((message) => message.cmd !== 'ack'), [])
@@ -1247,6 +1250,7 @@ describe('FAFXU22007', () => {
             splash_screen: 'Normal',
             clock_display: 'OFF',
             low_detergent: 'OFF',
+            low_softener: 'OFF',
             drawer: 'OFF',
             remote_start: 'OFF',
         })
