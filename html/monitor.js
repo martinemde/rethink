@@ -233,7 +233,7 @@ function renderFrame(frame) {
     const checkbox = element('input')
     checkbox.type = 'checkbox'
     checkbox.setAttribute('aria-label', 'Select frame ' + frame.number)
-    gutter.append(checkbox, element('span', '', '#' + frame.number))
+    gutter.append(checkbox, document.createTextNode('#' + frame.number))
     row.appendChild(gutter)
 
     const lane = element('div', 'frame-lane')
@@ -334,7 +334,7 @@ function renderSelectionBar(bounds) {
     bar.replaceChildren()
     bar.classList.toggle('active', !!bounds)
     if (!bounds) {
-        bar.appendChild(element('span', '', 'Select frames with the checkboxes. Shift-click to select a range.'))
+        bar.appendChild(element('span', '', 'Click a message or checkbox to select it. Shift-click to select a range.'))
         return
     }
     const count = selectedFrames().length
@@ -379,27 +379,31 @@ function setSelection(next) {
 
 const messagesEl = get('messages')
 
+messagesEl.addEventListener('mousedown', (ev) => {
+    if (ev.shiftKey && ev.target.closest('.frame')) ev.preventDefault()
+})
+
 messagesEl.addEventListener('click', (ev) => {
-    const checkbox = ev.target.closest('input[type="checkbox"]')
-    if (checkbox) {
-        const number = Number(checkbox.closest('.frame').dataset.number)
-        setSelection(
-            pressFrame(
-                selection,
-                number,
-                ev.shiftKey,
-                visibleFrames(-Infinity, Infinity).map((f) => f.number),
-            ),
-        )
-        focusFrame(number)
-        return
-    }
-    const label = ev.target.closest('.frame-label')
-    if (label) focusFrame(Number(label.dataset.inspect))
+    const row = ev.target.closest('.frame')
+    if (!row) return
+    // Clicking a checkbox label dispatches a second click on its input.
+    if (ev.target.closest('.frame-num') && !ev.target.matches('input')) return
+    if (!window.getSelection().isCollapsed && !ev.target.matches('input')) return
+    const number = Number(row.dataset.number)
+    setSelection(
+        pressFrame(
+            selection,
+            number,
+            ev.shiftKey,
+            visibleFrames(-Infinity, Infinity).map((f) => f.number),
+        ),
+    )
+    focusFrame(number)
 })
 
 document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape' && selection && !ev.target.closest('input, textarea')) setSelection(null)
+    if (ev.key === 'Escape' && selection && !ev.target.closest('input:not([type="checkbox"]), textarea'))
+        setSelection(null)
 })
 
 get('hold_pill').onclick = () => {
