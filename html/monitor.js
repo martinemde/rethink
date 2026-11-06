@@ -327,6 +327,12 @@ function updateSelection() {
         frame.row.querySelector('input[type="checkbox"]').checked = selected
     }
     renderSelectionBar(bounds)
+    if (!bounds) {
+        frames.get(focusedNumber)?.row.classList.remove('focused')
+        focusedNumber = null
+        get('inspector').className = 'inspector'
+        get('inspector').replaceChildren()
+    }
 }
 
 function renderSelectionBar(bounds) {
@@ -398,7 +404,8 @@ messagesEl.addEventListener('click', (ev) => {
             visibleFrames(-Infinity, Infinity).map((f) => f.number),
         ),
     )
-    focusFrame(number)
+    if (selection?.selected.has(number)) focusFrame(number)
+    else if (selectionBounds(selection)) focusFrame(selectedFrames().at(-1)?.number)
 })
 
 document.addEventListener('keydown', (ev) => {
@@ -606,8 +613,6 @@ get('clear_messages').onclick = () => {
     previousStatus = undefined
     focusedNumber = null
     setSelection(null)
-    get('inspector').className = 'inspector'
-    get('inspector').replaceChildren(element('p', 'inspector-empty', "Click a frame's label to see its bytes here."))
     get('packet_count').textContent = '0 packets'
 }
 
