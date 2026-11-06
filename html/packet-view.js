@@ -203,19 +203,21 @@ export function annotatedText(frame) {
     return lines.join('\n')
 }
 
-/**
- * Range selection over frame numbers. Pressing a frame starts a range there; with exactly one frame selected,
- * pressing another extends to it (the touch path: tap first, tap last); pressing the lone selected frame
- * clears. Returns the new { anchor, end }, or null for no selection.
- */
-export function pressFrame(selection, number) {
-    const single = selection && selection.anchor === selection.end
-    if (single && selection.anchor === number) return null
-    if (single) return { anchor: selection.anchor, end: number }
-    return { anchor: number, end: number }
+/** Toggle a checkbox, or apply its new state to the visible range from the last click. */
+export function pressFrame(selection, number, shiftKey = false, numbers = [number]) {
+    const selected = new Set(selection?.selected ?? [])
+    const checked = !selected.has(number)
+    const anchor = shiftKey && selection ? selection.anchor : number
+    const low = Math.min(anchor, number)
+    const high = Math.max(anchor, number)
+    for (const n of shiftKey && selection ? numbers.filter((n) => n >= low && n <= high) : [number]) {
+        if (checked) selected.add(n)
+        else selected.delete(n)
+    }
+    return { anchor: number, selected }
 }
 
 export function selectionBounds(selection) {
-    if (!selection) return null
-    return { low: Math.min(selection.anchor, selection.end), high: Math.max(selection.anchor, selection.end) }
+    if (!selection?.selected.size) return null
+    return { low: Math.min(...selection.selected), high: Math.max(...selection.selected) }
 }

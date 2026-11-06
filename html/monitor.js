@@ -109,7 +109,6 @@ let nextNumber = 1
 const frames = new Map()
 let selection = null
 let focusedNumber = null
-let dragging = false
 let heldNewFrames = 0
 
 function element(tag, className, text) {
@@ -230,10 +229,12 @@ function renderFrame(frame) {
     row.dataset.number = frame.number
     if (frame.decoded.type === 0xc3) row.classList.add('heartbeat')
 
-    const num = button('frame-num', '#' + frame.number)
-    num.setAttribute('aria-pressed', 'false')
-    num.setAttribute('aria-label', 'Frame ' + frame.number + ': select')
-    row.appendChild(num)
+    const gutter = element('label', 'frame-num')
+    const checkbox = element('input')
+    checkbox.type = 'checkbox'
+    checkbox.setAttribute('aria-label', 'Select frame ' + frame.number)
+    gutter.append(checkbox, element('span', '', '#' + frame.number))
+    row.appendChild(gutter)
 
     const lane = element('div', 'frame-lane')
     const bubble = element('div', 'bubble')
@@ -284,17 +285,24 @@ function pushMessage(direction, payload, injected, type) {
     messages.appendChild(frame.row)
     while (messages.children.length > MAX_MESSAGES) {
         const first = messages.firstElementChild
-        frames.delete(Number(first.dataset.number))
+        const number = Number(first.dataset.number)
+        frames.delete(number)
+        selection?.selected.delete(number)
         first.remove()
     }
     get('packet_count').textContent = ++packetCount + ' received · last ' + MAX_MESSAGES + ' retained'
 
-    if (selection) {
+    if (selectionBounds(selection)) {
         // A selection holds the reader's place; count what arrives instead of scrolling away from it.
         heldNewFrames++
+    } else {
+        heldNewFrames = 0
+        if (get('autoscroll').checked) messages.scrollTop = messages.scrollHeight
+    }
+    if (selection) {
         updateHoldPill()
         updateSelection()
-    } else if (get('autoscroll').checked) messages.scrollTop = messages.scrollHeight
+    }
     return frame.row
 }
 
@@ -307,16 +315,16 @@ function visibleFrames(low, high) {
     )
 }
 
+function selectedFrames() {
+    return visibleFrames(-Infinity, Infinity).filter((frame) => selection?.selected.has(frame.number))
+}
+
 function updateSelection() {
     const bounds = selectionBounds(selection)
     for (const frame of frames.values()) {
-        const inRange = !!bounds && frame.number >= bounds.low && frame.number <= bounds.high
-        frame.row.classList.toggle('in-range', inRange)
-        frame.row.classList.toggle('range-start', inRange && frame.number === bounds.low)
-        frame.row.classList.toggle('range-end', inRange && frame.number === bounds.high)
-        const num = frame.row.firstElementChild
-        num.setAttribute('aria-pressed', String(inRange))
-        num.setAttribute('aria-label', 'Frame ' + frame.number + (inRange ? ': selected' : ': select'))
+        const selected = selection?.selected.has(frame.number) ?? false
+        frame.row.classList.toggle('in-range', selected)
+        frame.row.querySelector('input[type="checkbox"]').checked = selected
     }
     renderSelectionBar(bounds)
 }
@@ -326,37 +334,23 @@ function renderSelectionBar(bounds) {
     bar.replaceChildren()
     bar.classList.toggle('active', !!bounds)
     if (!bounds) {
-        bar.appendChild(
-            element(
-                'span',
-                '',
-                'To select frames, drag down the # numbers, or tap the first frame and then the last. Shift-click also extends.',
-            ),
-        )
+        bar.appendChild(element('span', '', 'Select frames with the checkboxes. Shift-click to select a range.'))
         return
     }
-    const count = visibleFrames(bounds.low, bounds.high).length
-    bar.appendChild(
-        element('span', 'range', bounds.low === bounds.high ? '#' + bounds.low : '#' + bounds.low + '–#' + bounds.high),
-    )
-    bar.appendChild(
-        element(
-            'span',
-            '',
-            count === 1 && bounds.low === bounds.high ? '1 frame · tap another to extend' : count + ' frames',
-        ),
-    )
+    const count = selectedFrames().length
+    bar.appendChild(element('span', 'range', 'Selected'))
+    bar.appendChild(element('span', '', count === 1 ? '1 frame' : count + ' frames'))
     bar.appendChild(element('span', 'spacer'))
     bar.appendChild(
         copyButton('small-button', 'Copy D→R / R→D', () =>
-            visibleFrames(bounds.low, bounds.high)
+            selectedFrames()
                 .map((f) => transcriptLine(f.direction, f.rawHex))
                 .join('\n'),
         ),
     )
     bar.appendChild(
         copyButton('small-button secondary', 'Copy hex', () =>
-            visibleFrames(bounds.low, bounds.high)
+            selectedFrames()
                 .map((f) => f.rawHex)
                 .join('\n'),
         ),
@@ -378,49 +372,26 @@ function updateHoldPill() {
 
 function setSelection(next) {
     selection = next
-    if (!selection) heldNewFrames = 0
+    if (!selectionBounds(selection)) heldNewFrames = 0
     updateSelection()
     updateHoldPill()
 }
 
-function frameNumberAt(x, y) {
-    const row = document.elementFromPoint(x, y)?.closest('#messages .frame')
-    return row ? Number(row.dataset.number) : null
-}
-
 const messagesEl = get('messages')
 
-messagesEl.addEventListener('pointerdown', (ev) => {
-    const num = ev.target.closest('.frame-num')
-    if (!num || ev.button > 0) return
-    ev.preventDefault()
-    const number = Number(num.parentElement.dataset.number)
-    if (ev.shiftKey && selection) setSelection({ anchor: selection.anchor, end: number })
-    else setSelection(pressFrame(selection, number))
-    dragging = !!selection
-    if (selection) focusFrame(number)
-})
-
-// Pointer capture keeps a touch drag's events on the number it started on, so the row under the pointer is
-// looked up by position instead of relying on pointerenter.
-document.addEventListener('pointermove', (ev) => {
-    if (!dragging || !selection) return
-    const number = frameNumberAt(ev.clientX, ev.clientY)
-    if (number !== null && number !== selection.end) setSelection({ anchor: selection.anchor, end: number })
-})
-const endDrag = () => (dragging = false)
-document.addEventListener('pointerup', endDrag)
-document.addEventListener('pointercancel', endDrag)
-
 messagesEl.addEventListener('click', (ev) => {
-    const num = ev.target.closest('.frame-num')
-    // Keyboard activation (Enter/Space) arrives as a click with no pointer press before it.
-    if (num && ev.detail === 0) {
-        const number = Number(num.parentElement.dataset.number)
+    const checkbox = ev.target.closest('input[type="checkbox"]')
+    if (checkbox) {
+        const number = Number(checkbox.closest('.frame').dataset.number)
         setSelection(
-            ev.shiftKey && selection ? { anchor: selection.anchor, end: number } : pressFrame(selection, number),
+            pressFrame(
+                selection,
+                number,
+                ev.shiftKey,
+                visibleFrames(-Infinity, Infinity).map((f) => f.number),
+            ),
         )
-        if (selection) focusFrame(number)
+        focusFrame(number)
         return
     }
     const label = ev.target.closest('.frame-label')
