@@ -143,7 +143,8 @@ test('receipt and delivery ACKs retain independent meanings', () => {
 })
 
 test('washer EC validates both markers; dryer records do not require a zero marker', () => {
-    const previous = Array(51).fill(0), current = Array(51).fill(0)
+    const previous = Array(51).fill(0),
+        current = Array(51).fill(0)
     previous[0] = 1
     assert.equal(decodePacket(envelope(0x20, 0xec, [...previous, ...current]), { model: washer }).valid, false)
     previous[0] = 0

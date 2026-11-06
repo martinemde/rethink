@@ -9,11 +9,11 @@ The accepted local decoding is now used by the washer handler.
 CRC/length-valid EB51 reports during the same TubClean run on2026-10-23 UTC:
 
 | UTC (first received value) | Record bytes17–19 (hex) | BE16@17 | Upstream LE16@18 |
-| --- | --- | ---: | ---: |
-| 03:08:54.335 | `00 FC 00` | 252 | 252 |
-| 03:09:10.260 | `01 00 00` | 256 | 0 |
-| 03:24:31.934 | `01 E0 00` | 480 | 224 |
-| 03:24:47.829 | `02 02 00` | 514 | 2 |
+| -------------------------- | ----------------------- | ------: | ---------------: |
+| 03:08:54.335               | `00 FC 00`              |     252 |              252 |
+| 03:09:10.260               | `01 00 00`              |     256 |                0 |
+| 03:24:31.934               | `01 E0 00`              |     480 |              224 |
+| 03:24:47.829               | `02 02 00`              |     514 |                2 |
 
 Course85 and state41 remain unchanged at both carries. These are EB reports,
 not stale first halves of EC frames. Repeated receipts occurred between first
