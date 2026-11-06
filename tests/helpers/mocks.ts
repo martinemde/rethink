@@ -112,10 +112,15 @@ export class MockThinq2Device extends Thinq2Device {
     sent: SentMessage[] = []
 
     constructor(id: string, meta: Metadata) {
-        // The real Device only touches `broker` from inside `send`; we override `send` so the
-        // broker is never actually used. `deployAppInfo` is only read by the cloud bridge, which
-        // no device test goes through.
-        super(null as unknown as Broker, 'mock/topic', id, meta, undefined as unknown as DeployAppInfo, undefined)
+        // Legacy send_packet remains recorded below. ACKs use the real stream/sendRaw path,
+        // with only the final broker publish replaced by a recorder.
+        const broker = {
+            publish: (packet: { payload: string }) => {
+                const { cmd, type, data } = JSON.parse(packet.payload)
+                this.sent.push({ cmd, type, data })
+            },
+        } as unknown as Broker
+        super(broker, 'mock/topic', id, meta, undefined as unknown as DeployAppInfo, undefined)
     }
 
     override send(cmd: string, type: number, data: string | object) {

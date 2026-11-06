@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import crc16 from '@/util/crc16'
 import DUT from '@/cloud/devices/FAFXU22007'
 import type { Metadata } from '@/cloud/thinq'
-import { MockHAConnection, MockThinq2Device, buf, hex } from '@/tests/helpers/mocks'
+import { MockHAConnection, buf, hex } from '@/tests/helpers/mocks'
+import { MockLaundryDevice as MockThinq2Device, sendCloud } from '@/tests/helpers/laundry'
 
 // Synthetic variants of sanitized upstream fixtures exercise strict validation and isolated flags.
 function checksum(frame: Buffer) {
@@ -41,7 +42,7 @@ describe('FAFXU22007 verified local behavior', () => {
             frame[15 + 17] = high
             frame[15 + 18] = low
             frame[15 + 19] = adjacent
-            thinq.emit('data', checksum(frame))
+            thinq.onData(checksum(frame))
             assert.equal(ha.devices[DEVICE_ID].properties.energy, expected)
         }
     })
@@ -60,7 +61,7 @@ describe('FAFXU22007 verified local behavior', () => {
             frame.writeUInt16BE(remaining, 15 + 13)
             frame.writeUInt16BE(total, 15 + 15)
             frame.writeUInt16BE(energy, 15 + 17)
-            thinq.emit('data', checksum(frame))
+            thinq.onData(checksum(frame))
             const p = ha.devices[DEVICE_ID].properties
             assert.equal(p.remaining_time, remaining)
             assert.equal(p.initial_time, total)
@@ -76,23 +77,23 @@ describe('FAFXU22007 verified local behavior', () => {
             if (args[1] === 'cycle_finished') events.push(args)
             publish(...args)
         }
-        thinq.emit('data', notification())
-        thinq.emit('data', END)
+        thinq.onData(notification())
+        thinq.onData(END)
         assert.equal(events.length, 0)
-        thinq.emit('data', RUNNING)
-        for (let i = 0; i < 10; i++) thinq.emit('data', notification())
+        thinq.onData(RUNNING)
+        for (let i = 0; i < 10; i++) thinq.onData(notification())
         assert.equal(events.length, 1)
         assert.deepEqual(events[0].slice(2), [JSON.stringify({ event_type: 'finished' }), { retain: false }])
-        thinq.emit('data', OFF_AFTER_END)
-        thinq.emit('data', notification())
+        thinq.onData(OFF_AFTER_END)
+        thinq.onData(notification())
         assert.equal(events.length, 1)
-        thinq.emit('data', RUNNING)
-        thinq.emit('data', notification(120))
-        thinq.emit('data', notification(121, [8, 11, 1, 11, 8, 3]))
+        thinq.onData(RUNNING)
+        thinq.onData(notification(120))
+        thinq.onData(notification(121, [8, 11, 1, 11, 8, 3]))
         assert.equal(events.length, 1)
-        thinq.emit('data', notification())
+        thinq.onData(notification())
         assert.equal(events.length, 2)
-        thinq.emit('data', SPINNING)
+        thinq.onData(SPINNING)
         assert.equal(ha.devices[DEVICE_ID].properties.status, 'Spinning')
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(
@@ -134,14 +135,14 @@ describe('FAFXU22007 verified local behavior', () => {
 
     test('door requires every signature byte and is not changed by drawer reports', () => {
         const { ha, thinq } = makeDevice()
-        thinq.emit('data', DOOR_OPEN)
+        thinq.onData(DOOR_OPEN)
         for (const offset of [16, 17, 18]) {
             const bad = Buffer.from(DOOR_SHUT)
             bad[offset] ^= 1
-            thinq.emit('data', checksum(bad))
+            thinq.onData(checksum(bad))
         }
-        thinq.emit('data', DRAWER_SHUT)
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(DRAWER_SHUT)
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.door, 'ON')
     })
 
@@ -1150,7 +1151,7 @@ function makeDevice() {
 
 function feed(frames: Buffer[]) {
     const { ha, thinq } = makeDevice()
-    for (const f of frames) thinq.emit('data', f)
+    for (const f of frames) thinq.onData(f)
     return applianceProperties(ha.devices[DEVICE_ID].properties)
 }
 
@@ -1366,27 +1367,27 @@ describe('FAFXU22007', () => {
         const { ha, thinq } = makeDevice()
         const p = () => ha.devices[DEVICE_ID].properties
 
-        thinq.emit('data', RINSING)
+        thinq.onData(RINSING)
         assert.equal(p().status, 'Rinsing')
         assert.equal(p().course, 'Rinse + Spin')
         assert.equal(p().remaining_time, 18)
         assert.equal(p().door_lock, 'OFF')
 
-        thinq.emit('data', DOOR_LOCKED)
+        thinq.onData(DOOR_LOCKED)
         assert.equal(p().door_lock, 'ON')
 
-        thinq.emit('data', SPINNING)
+        thinq.onData(SPINNING)
         assert.equal(p().status, 'Spinning')
         assert.equal(p().remaining_time, 12)
         assert.equal(p().initial_time, 18)
 
-        thinq.emit('data', END)
+        thinq.onData(END)
         assert.equal(p().status, 'Finished')
         assert.equal(p().door_lock, 'OFF')
         assert.equal(p().energy, 45)
         assert.equal(p().tub_clean_count, 22)
 
-        thinq.emit('data', OFF_AFTER_END)
+        thinq.onData(OFF_AFTER_END)
         assert.equal(p().power, 'OFF')
         assert.equal(p().status, 'Off')
         assert.equal(p().energy, 45)
@@ -1414,16 +1415,16 @@ describe('FAFXU22007', () => {
         const { ha, thinq } = makeDevice()
         const p = () => ha.devices[DEVICE_ID].properties
 
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         assert.equal(p().door, undefined)
 
-        thinq.emit('data', DOOR_OPEN)
+        thinq.onData(DOOR_OPEN)
         assert.equal(p().door, 'ON')
-        thinq.emit('data', EB_IDLE) // a status record says nothing about the door
+        thinq.onData(EB_IDLE) // a status record says nothing about the door
         assert.equal(p().door, 'ON')
-        thinq.emit('data', MENU_EVENT)
+        thinq.onData(MENU_EVENT)
         assert.equal(p().door, 'ON')
-        thinq.emit('data', DOOR_SHUT)
+        thinq.onData(DOOR_SHUT)
         assert.equal(p().door, 'OFF')
     })
 
@@ -1431,32 +1432,32 @@ describe('FAFXU22007', () => {
         const { ha, thinq } = makeDevice()
         const p = () => ha.devices[DEVICE_ID].properties
 
-        thinq.emit('data', DRAWER_OPEN)
+        thinq.onData(DRAWER_OPEN)
         assert.deepEqual(applianceProperties(p()), { drawer: 'ON' })
-        thinq.emit('data', DRAWER_SHUT)
+        thinq.onData(DRAWER_SHUT)
         assert.equal(p().drawer, 'OFF')
-        thinq.emit('data', DRAWER_RESENT)
+        thinq.onData(DRAWER_RESENT)
         assert.equal(p().drawer, 'OFF')
     })
 
     test('only matched accepted properties publish immediately; unsolicited replies do not', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
-        thinq.emit('data', E6_REPLY)
+        thinq.onData(EB_IDLE)
+        thinq.onData(E6_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Very High')
         dev.setProperty('buzzer', 'Low')
-        thinq.emit('data', E6_REPLY)
+        thinq.onData(E6_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Low')
-        thinq.emit('data', POWER_OFF_REPLY)
+        thinq.onData(POWER_OFF_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
     })
 
     test('a refused write changes nothing but the problem sensor', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         const before = applianceProperties(ha.devices[DEVICE_ID].properties)
         dev.setProperty('buzzer', 'Off')
-        thinq.emit('data', WRITE_REFUSED)
+        thinq.onData(WRITE_REFUSED)
         assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), {
             ...before,
             problem: 'ON',
@@ -1496,7 +1497,7 @@ describe('FAFXU22007', () => {
     test('setting the buzzer sends exactly what the ThinQ app sent', () => {
         for (const [i, level] of ['Off', 'Low', 'Medium', 'High', 'Very High'].entries()) {
             const { thinq, dev } = makeDevice()
-            thinq.emit('data', EB_IDLE)
+            thinq.onData(EB_IDLE)
             dev.setProperty('buzzer', level)
             assert.deepEqual(thinq.outbox.map(hex), [verifiedBuzzer(APP_CHIME[i])])
         }
@@ -1610,7 +1611,7 @@ describe('FAFXU22007', () => {
         ]
         for (const [prop, value, write, before] of cases) {
             const { thinq, dev } = makeDevice()
-            thinq.emit('data', before ?? EB_IDLE)
+            thinq.onData(before ?? EB_IDLE)
             dev.setProperty(prop, value)
             assert.deepEqual(thinq.outbox.map(hex), [hex(write)], `${prop} = ${value}`)
         }
@@ -1620,7 +1621,7 @@ describe('FAFXU22007', () => {
         const { thinq, dev } = makeDevice()
         dev.setProperty('start', '')
         assert.deepEqual(thinq.outbox, []) // no record, no course
-        thinq.emit('data', APP_STARTED)
+        thinq.onData(APP_STARTED)
         dev.setProperty('start', '')
         assert.deepEqual(thinq.outbox.map(hex), [hex(APP_START)])
     })
@@ -1657,24 +1658,24 @@ describe('FAFXU22007', () => {
     // and answered the second with 0x13 on every setting, busy; so the second now waits for the reply.
     test('two quick changes: the second waits for the reply to the first, and carries it', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', HA_REC_BEFORE_PAIR) // Normal, Hot, High, TurboWash on
+        thinq.onData(HA_REC_BEFORE_PAIR) // Normal, Hot, High, TurboWash on
         dev.setProperty('temp', 'Warm')
         dev.setProperty('spin', 'Low')
         // aa <len> f0 e5 00 02 01 ff <count> <body> <chk> bb
         const body = (b: Buffer) => b.subarray(9, -2).toString('hex')
         const rest = '1e03200e3e0034003800350144007f0000'
         assert.deepEqual(thinq.outbox.map(body), ['1f10210f' + rest])
-        thinq.emit('data', HA_REPLY_WARM)
+        thinq.onData(HA_REPLY_WARM)
         assert.deepEqual(thinq.outbox.map(body), ['1f10210f' + rest, '1f10210d' + rest])
     })
 
     test('a record arriving while a change waits to go out does not undo it', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', HA_REC_BEFORE_PAIR)
+        thinq.onData(HA_REC_BEFORE_PAIR)
         dev.setProperty('temp', 'Warm')
         dev.setProperty('spin', 'Low')
-        thinq.emit('data', HA_REC_BEFORE_PAIR) // still High
-        thinq.emit('data', HA_REPLY_WARM)
+        thinq.onData(HA_REC_BEFORE_PAIR) // still High
+        thinq.onData(HA_REPLY_WARM)
         assert.equal(thinq.outbox[1].subarray(9, 13).toString('hex'), '1f10210d')
     })
 
@@ -1682,11 +1683,11 @@ describe('FAFXU22007', () => {
     // 50 ms later. Sent as soon as the app's write was answered, HA's bundle turned Pre-wash back off.
     test("a bundle from HA queued behind the app's carries what the app's changed", () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EC_SPIN_LOW)
-        thinq.send_packet(buf(APP_PRE_WASH_ON))
+        thinq.onData(EC_SPIN_LOW)
+        sendCloud(thinq, buf(APP_PRE_WASH_ON))
         dev.setProperty('soil', 'Light')
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', APP_PRE_WASH_ON_REPLY)
+        thinq.onData(APP_PRE_WASH_ON_REPLY)
         // aa <len> f0 e5 00 02 01 ff <count> <body> <chk> bb
         assert.equal(thinq.outbox[1].subarray(9, -2).toString('hex'), '1f10210e1e01200e3e0034013800350144007f0000')
     })
@@ -1706,7 +1707,7 @@ describe('FAFXU22007', () => {
 
     test('with Cold Wash on, no soil above Medium is sent, as the app offers none', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', COLD_WASH_APP)
+        thinq.onData(COLD_WASH_APP)
         dev.setProperty('soil', 'Medium Heavy')
         dev.setProperty('soil', 'Heavy')
         assert.deepEqual(thinq.outbox, [])
@@ -1716,7 +1717,7 @@ describe('FAFXU22007', () => {
 
     test('Delay Start outside 0 or 60-1140 in 30-minute steps sends nothing', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         for (const value of ['30', '45', '1170', 'soon']) dev.setProperty('reserve_time', value)
         assert.deepEqual(thinq.outbox, [])
     })
@@ -1736,7 +1737,7 @@ describe('FAFXU22007', () => {
         ]
         for (const [frame, ack] of cases) {
             const { thinq } = makeDevice()
-            thinq.emit('data', frame)
+            thinq.onData(frame)
             assert.deepEqual(acks(thinq), [ack])
             assert.deepEqual(thinq.outbox, [])
         }
@@ -1744,11 +1745,11 @@ describe('FAFXU22007', () => {
 
     test('settings polls are ACKed but heartbeats and appliance ACKs are not', () => {
         const { thinq } = makeDevice()
-        thinq.emit('data', SETTINGS_POLL)
+        thinq.onData(SETTINGS_POLL)
         assert.deepEqual(acks(thinq), ['aa08f0007f0470bb'])
         thinq.resetRecorder()
-        thinq.emit('data', HEARTBEAT)
-        thinq.emit('data', buf('aa0a20000b00ba7e42bb'))
+        thinq.onData(HEARTBEAT)
+        thinq.onData(buf('aa0a20000b00ba7e42bb'))
         assert.deepEqual(acks(thinq), [])
     })
 
@@ -1798,7 +1799,7 @@ describe('FAFXU22007 remote maintain', () => {
             ['ON', CLOUD_REMOTE_MAINTAIN_ON],
         ]) {
             const { thinq, dev } = makeDevice()
-            thinq.emit('data', EB_IDLE)
+            thinq.onData(EB_IDLE)
             dev.setProperty('remote_maintain', value)
             assert.deepEqual(thinq.outbox.map(hex), [frame])
         }
@@ -1809,53 +1810,58 @@ describe('FAFXU22007 remote maintain', () => {
 
     test("the washer's reply lets the next write go", () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('remote_maintain', 'ON')
         dev.setProperty('buzzer', 'Off')
         assert.deepEqual(thinq.outbox.map(hex), [CLOUD_REMOTE_MAINTAIN_ON])
-        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        thinq.onData(REMOTE_MAINTAIN_REPLY)
         assert.deepEqual(thinq.outbox.map(hex), [CLOUD_REMOTE_MAINTAIN_ON, verifiedBuzzer(APP_CHIME[0])])
     })
 
     test('a refusal is a problem until a command goes through', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('remote_maintain', 'ON')
-        thinq.emit('data', REMOTE_MAINTAIN_REFUSED)
+        thinq.onData(REMOTE_MAINTAIN_REFUSED)
         assert.equal(ha.devices[DEVICE_ID].properties.problem_reason, 'Command refused (0x03)')
         dev.setProperty('remote_maintain', 'ON')
-        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        thinq.onData(REMOTE_MAINTAIN_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.problem, 'OFF')
     })
 
     // While bridged, the cloud's packets go out through the same device object as ours.
     test("the reply to the cloud's own command changes nothing", () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('buzzer', 'Off')
-        thinq.emit('data', WRITE_REFUSED)
+        thinq.onData(WRITE_REFUSED)
         dev.setProperty('buzzer', 'Low')
         dev.setProperty('buzzer', 'Medium')
-        thinq.send_packet(buf(CLOUD_REMOTE_MAINTAIN_OFF))
-        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        sendCloud(thinq, buf(CLOUD_REMOTE_MAINTAIN_OFF))
+        thinq.onData(REMOTE_MAINTAIN_REPLY) // not sent yet: cannot settle the active E5
+        assert.deepEqual(thinq.outbox.map(hex), [verifiedBuzzer(APP_CHIME[0]), verifiedBuzzer(APP_CHIME[1])])
+        thinq.onData(WRITE_REFUSED)
+        thinq.onData(WRITE_REFUSED)
+        thinq.onData(REMOTE_MAINTAIN_REPLY)
         assert.deepEqual(thinq.outbox.map(hex), [
             verifiedBuzzer(APP_CHIME[0]),
             verifiedBuzzer(APP_CHIME[1]),
+            verifiedBuzzer(APP_CHIME[2]),
             CLOUD_REMOTE_MAINTAIN_OFF,
         ])
         assert.equal(ha.devices[DEVICE_ID].properties.problem, 'ON')
     })
 
-    test("with the cloud's command and ours both awaiting, each reply goes to the oldest", () => {
+    test("our command waits for the cloud's command to settle before reaching the wire", () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
-        thinq.send_packet(buf(CLOUD_REMOTE_MAINTAIN_OFF))
+        thinq.onData(EB_IDLE)
+        sendCloud(thinq, buf(CLOUD_REMOTE_MAINTAIN_OFF))
         dev.setProperty('remote_maintain', 'ON')
         assert.deepEqual(thinq.outbox.map(hex), [CLOUD_REMOTE_MAINTAIN_OFF])
-        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        thinq.onData(REMOTE_MAINTAIN_REPLY)
         assert.deepEqual(thinq.outbox.map(hex), [CLOUD_REMOTE_MAINTAIN_OFF, CLOUD_REMOTE_MAINTAIN_ON])
         assert.equal(ha.devices[DEVICE_ID].properties.problem, undefined)
-        thinq.emit('data', REMOTE_MAINTAIN_REFUSED)
+        thinq.onData(REMOTE_MAINTAIN_REFUSED)
         assert.equal(ha.devices[DEVICE_ID].properties.problem_reason, 'Command refused (0x03)')
     })
 })
@@ -1874,24 +1880,24 @@ describe('FAFXU22007 problem sensor', () => {
 
     test('a refused write is a problem until a write goes through', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('buzzer', 'Off')
-        thinq.emit('data', WRITE_REFUSED)
-        thinq.emit('data', EC_ON)
+        thinq.onData(WRITE_REFUSED)
+        thinq.onData(EC_ON)
         assert.deepEqual(problem(ha), ['ON', 'Command refused (0x03)'])
         dev.setProperty('spin', 'Low')
-        thinq.emit('data', HA_SPIN_LOW_REPLY)
+        thinq.onData(HA_SPIN_LOW_REPLY)
         assert.deepEqual(problem(ha), ['OFF', 'OK'])
         assert.equal(ha.devices[DEVICE_ID].properties.spin, 'Low')
     })
 
     test('with no course, a bundle setting is not sent and the problem says why', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EC_ON_NO_COURSE)
+        thinq.onData(EC_ON_NO_COURSE)
         dev.setProperty('spin', 'Low')
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(problem(ha), ['ON', 'No course selected: choose a course first'])
-        thinq.emit('data', EC_ON)
+        thinq.onData(EC_ON)
         assert.deepEqual(problem(ha), ['OFF', 'OK'])
         dev.setProperty('spin', 'Low')
         assert.equal(thinq.outbox.length, 1)
@@ -1899,19 +1905,19 @@ describe('FAFXU22007 problem sensor', () => {
 
     test('a write that goes through publishes nothing while there is no problem', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('buzzer', 'Off')
-        thinq.emit('data', HA_SPIN_LOW_REPLY)
+        thinq.onData(HA_SPIN_LOW_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.problem, undefined)
     })
 
     test("the reply to the app's write, sent through the bridge, is not taken for ours", () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EC_ON)
-        thinq.send_packet(buf(APP_CHIME[0]))
+        thinq.onData(EC_ON)
+        sendCloud(thinq, buf(APP_CHIME[0]))
         dev.setProperty('spin', 'Low')
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', WRITE_REFUSED)
+        thinq.onData(WRITE_REFUSED)
         assert.equal(ha.devices[DEVICE_ID].properties.problem, undefined)
         assert.equal(thinq.outbox.length, 2)
     })
@@ -2024,12 +2030,12 @@ describe('FAFXU22007 ending melody', () => {
                 c.options,
                 MELODY_CAPTURES.map(([name]) => name),
             )
-            thinq.emit('data', EB_IDLE)
+            thinq.onData(EB_IDLE)
             const before = applianceProperties(ha.devices[DEVICE_ID].properties)
             dev.setProperty('melody', label)
             assert.deepEqual(thinq.outbox, [buf(command)])
             assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), before)
-            thinq.emit('data', buf(accepted))
+            thinq.onData(buf(accepted))
             assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), { ...before, melody: label })
             dev.drop()
         }
@@ -2052,14 +2058,14 @@ describe('FAFXU22007 ending melody', () => {
         const arirang = buf(MELODY_CAPTURES[9][2])
         for (const outcome of ['accepted', 'refused', 'wrong property', 'course', 'off'] as const) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', EB_IDLE)
+            thinq.onData(EB_IDLE)
             dev.setProperty('melody', 'Vivaldi Winter')
-            if (outcome === 'course') thinq.emit('data', BEDDING)
-            if (outcome === 'off') thinq.emit('data', POWER_OFF)
+            if (outcome === 'course') thinq.onData(BEDDING)
+            if (outcome === 'off') thinq.onData(POWER_OFF)
             const before = applianceProperties(ha.devices[DEVICE_ID].properties)
-            if (outcome === 'refused') thinq.emit('data', reply([0x50], arirang.subarray(11, -2), [3]))
-            else if (outcome === 'wrong property') thinq.emit('data', reply([0x51], arirang.subarray(11, -2)))
-            else thinq.emit('data', arirang)
+            if (outcome === 'refused') thinq.onData(reply([0x50], arirang.subarray(11, -2), [3]))
+            else if (outcome === 'wrong property') thinq.onData(reply([0x51], arirang.subarray(11, -2)))
+            else thinq.onData(arirang)
             const after = applianceProperties(ha.devices[DEVICE_ID].properties)
             assert.equal(after.melody, outcome === 'accepted' ? 'Arirang' : before.melody)
             for (const key of ['splash_screen', 'clock_display', 'nozzle_clean_tank', 'buzzer', 'course'])
@@ -2073,13 +2079,13 @@ describe('FAFXU22007 ending melody', () => {
         const now = Date.now()
         const clock = ctx.mock.method(Date, 'now', () => now)
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('melody', 'Vivaldi Winter')
-        thinq.emit('data', buf(MELODY_CAPTURES[9][2]))
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(buf(MELODY_CAPTURES[9][2]))
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Arirang')
         clock.mock.mockImplementation(() => now + 30_000)
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
         dev.drop()
@@ -2088,9 +2094,9 @@ describe('FAFXU22007 ending melody', () => {
     test('invalid labels and missing or Off context send no command or query', () => {
         const { thinq, dev } = makeDevice()
         dev.setProperty('melody', 'Arirang')
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         for (const label of ['', 'arirang', '9', 'ON', 'Arirang ', 'unknown']) dev.setProperty('melody', label)
-        thinq.emit('data', POWER_OFF)
+        thinq.onData(POWER_OFF)
         dev.setProperty('melody', 'Arirang')
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(
@@ -2128,7 +2134,7 @@ describe('FAFXU22007 clock display', () => {
             assert.equal(c.icon, 'mdi:clock-outline')
             assert.equal(c.command_topic, '$this/clock_display/set')
             assert.equal(c.retain, false)
-            thinq.emit('data', EB_IDLE)
+            thinq.onData(EB_IDLE)
             dev.setProperty('clock_display', value)
             const frame = buf(expected)
             assert.equal(frame.length, frame[1])
@@ -2142,10 +2148,10 @@ describe('FAFXU22007 clock display', () => {
     test('invalid values and missing or Off context send nothing and never power on', () => {
         const { thinq, dev } = makeDevice()
         dev.setProperty('clock_display', 'OFF')
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         for (const value of ['', 'on', 'off', '1', '0', 'true', 'false', 'ON ', 'unknown'])
             dev.setProperty('clock_display', value)
-        thinq.emit('data', POWER_OFF)
+        thinq.onData(POWER_OFF)
         dev.setProperty('clock_display', 'OFF')
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(
@@ -2176,14 +2182,14 @@ describe('FAFXU22007 clock display', () => {
     test('matched E6 uses actual clock bit only, including refusal and wrong property', () => {
         for (const result of [0, 0x10, 0x11, 3, 0x13]) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', EB_IDLE)
+            thinq.onData(EB_IDLE)
             dev.setProperty('clock_display', 'ON')
             const actual = currentRecord()
             actual[47] = 0xe0
             actual[46] = 9
-            thinq.emit('data', reply([0x51], actual))
+            thinq.onData(reply([0x51], actual))
             assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
-            thinq.emit('data', reply([0x58], actual, [result]))
+            thinq.onData(reply([0x58], actual, [result]))
             const p = ha.devices[DEVICE_ID].properties
             assert.equal(p.clock_display, [0, 0x10, 0x11].includes(result) ? 'ON' : 'OFF')
             assert.equal(p.nozzle_clean_tank, 'None')
@@ -2191,9 +2197,9 @@ describe('FAFXU22007 clock display', () => {
             dev.drop()
         }
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('clock_display', 'ON')
-        thinq.emit('data', reply([0x58], currentRecord()))
+        thinq.onData(reply([0x58], currentRecord()))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
     })
 
@@ -2201,27 +2207,27 @@ describe('FAFXU22007 clock display', () => {
         const now = Date.now()
         const clock = ctx.mock.method(Date, 'now', () => now)
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('clock_display', 'ON')
         const actual = currentRecord()
         actual[47] = 0x80
-        thinq.emit('data', reply([0x58], actual))
+        thinq.onData(reply([0x58], actual))
         const stale = Buffer.from(EB_IDLE)
         stale[15 + 47] = 0x40
         clock.mock.mockImplementation(() => now + 29_999)
-        thinq.emit('data', checksum(stale))
+        thinq.onData(checksum(stale))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
         assert.equal(ha.devices[DEVICE_ID].properties.nozzle_clean_tank, 'Softener Tank')
         clock.mock.mockImplementation(() => now + 30_000)
-        thinq.emit('data', checksum(stale))
+        thinq.onData(checksum(stale))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
         dev.setProperty('clock_display', 'ON')
-        thinq.emit('data', reply([0x58], actual))
+        thinq.onData(reply([0x58], actual))
         const matched = Buffer.from(stale)
         matched[15 + 47] |= 0x80
-        thinq.emit('data', checksum(matched))
-        thinq.emit('data', checksum(stale))
+        thinq.onData(checksum(matched))
+        thinq.onData(checksum(stale))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
     })
 
@@ -2233,14 +2239,14 @@ describe('FAFXU22007 clock display', () => {
             return original(() => {}, 1_000_000).unref()
         }) as typeof setTimeout)
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('clock_display', 'ON')
         dev.setProperty('clock_display', 'OFF')
         expire!()
         const actual = currentRecord()
         actual[47] = 0x80
-        thinq.emit('data', reply([0x58], actual))
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(reply([0x58], actual))
+        thinq.onData(EB_IDLE)
         dev.setProperty('clock_display', 'ON')
         assert.equal(thinq.outbox.length, 1)
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
@@ -2250,24 +2256,24 @@ describe('FAFXU22007 clock display', () => {
 
     test('queued latest intent suppresses old acceptance; course and Off invalidate late replies', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('clock_display', 'ON')
         dev.setProperty('clock_display', 'ON')
         dev.setProperty('clock_display', 'OFF')
         const on = currentRecord()
         on[47] = 0x80
-        thinq.emit('data', reply([0x58], on))
+        thinq.onData(reply([0x58], on))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
         assert.equal(thinq.outbox.length, 2)
         assert.equal(thinq.outbox[1][10], 0)
-        thinq.emit('data', reply([0x58], currentRecord()))
+        thinq.onData(reply([0x58], currentRecord()))
         for (const boundary of [BEDDING, POWER_OFF]) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', EB_IDLE)
+            thinq.onData(EB_IDLE)
             dev.setProperty('clock_display', 'ON')
-            thinq.emit('data', boundary)
+            thinq.onData(boundary)
             const before = applianceProperties(ha.devices[DEVICE_ID].properties)
-            thinq.emit('data', reply([0x58], on))
+            thinq.onData(reply([0x58], on))
             assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), before)
         }
     })
@@ -2276,56 +2282,56 @@ describe('FAFXU22007 clock display', () => {
 describe('FAFXU22007 reconciled controls', () => {
     test('accepted course with stale embedded course cannot invent defaults or publish a course', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('course', 'Bedding')
         dev.setProperty('soil', 'Light')
-        thinq.emit('data', reply([0x0a], currentRecord()))
+        thinq.onData(reply([0x0a], currentRecord()))
         assert.equal(ha.devices[DEVICE_ID].properties.course, 'Normal')
         assert.equal(thinq.outbox.length, 1)
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /context|status/)
-        thinq.emit('data', BEDDING)
+        thinq.onData(BEDDING)
         dev.setProperty('soil', 'Light')
         assert.equal(thinq.outbox.length, 2)
     })
 
     test('later same-property intent behind an action remains pending when older entry dispatches', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('soil', 'Light')
         dev.setProperty('buzzer', 'Medium')
         dev.setProperty('pause', '')
         dev.setProperty('buzzer', 'Medium')
         const actual = currentRecord()
         actual[1] = 1
-        thinq.emit('data', reply(BUNDLE_IDS, actual))
+        thinq.onData(reply(BUNDLE_IDS, actual))
         assert.equal(thinq.outbox.length, 2)
         actual[29] = 2
-        thinq.emit('data', reply([0x13], actual))
+        thinq.onData(reply([0x13], actual))
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Very High')
-        thinq.emit('data', reply([0x03], actual))
+        thinq.onData(reply([0x03], actual))
         assert.equal(thinq.outbox.length, 4)
-        thinq.emit('data', reply([0x13], actual))
+        thinq.onData(reply([0x13], actual))
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Medium')
     })
 
     test('bundle groups on opposite sides of course barrier remain separate', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('buzzer', 'Low')
         dev.setProperty('soil', 'Light')
         dev.setProperty('course', 'Bedding')
         dev.setProperty('spin', 'Low')
-        thinq.emit('data', reply([0x13], currentRecord()))
+        thinq.onData(reply([0x13], currentRecord()))
         assert.equal(thinq.outbox.length, 2)
         const first = thinq.outbox[1].subarray(2, -2)
         assert.equal(first[10], 15)
         assert.equal(first[12], 1)
         const soil = currentRecord()
         soil[1] = 1
-        thinq.emit('data', reply(BUNDLE_IDS, soil))
+        thinq.onData(reply(BUNDLE_IDS, soil))
         assert.equal(thinq.outbox.length, 3)
         assert.equal(thinq.outbox[2][9], 0x0a)
-        thinq.emit('data', reply([0x0a], currentRecord(BEDDING)))
+        thinq.onData(reply([0x0a], currentRecord(BEDDING)))
         assert.equal(thinq.outbox.length, 4)
         const last = thinq.outbox[3].subarray(2, -2)
         assert.equal(last[10], 13)
@@ -2336,18 +2342,18 @@ describe('FAFXU22007 reconciled controls', () => {
         const { thinq, dev } = makeDevice()
         for (const prop of ['buzzer', 'course', 'start', 'spin']) dev.setProperty(prop, 'Low')
         assert.equal(thinq.outbox.length, 0)
-        thinq.emit('data', POWER_OFF)
+        thinq.onData(POWER_OFF)
         dev.setProperty('buzzer', 'Low')
         dev.setProperty('soil', 'Light')
         assert.equal(thinq.outbox.length, 0)
         const unknown = Buffer.from(EB_IDLE)
         unknown[15 + 2] = 255
-        thinq.emit('data', checksum(unknown))
+        thinq.onData(checksum(unknown))
         dev.setProperty('soil', 'Light')
         assert.equal(thinq.outbox.length, 0)
         const downloaded = Buffer.from(EB_IDLE)
         downloaded[15 + 5] = 255
-        thinq.emit('data', checksum(downloaded))
+        thinq.onData(checksum(downloaded))
         dev.setProperty('start', '')
         assert.equal(thinq.outbox.length, 0)
         assert.equal(thinq.sent.filter((message) => message.cmd !== 'ack').length, 0)
@@ -2355,48 +2361,48 @@ describe('FAFXU22007 reconciled controls', () => {
 
     test('rapid buzzer Low/Medium/High sends Low then latest High and never publishes Low', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('buzzer', 'Low')
         dev.setProperty('buzzer', 'Medium')
         dev.setProperty('buzzer', 'High')
         assert.equal(thinq.outbox.length, 1)
         const low = currentRecord()
         low[29] = 1
-        thinq.emit('data', reply([0x13], low))
+        thinq.onData(reply([0x13], low))
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Very High')
         assert.equal(thinq.outbox.length, 2)
         assert.equal(thinq.outbox[1][10], 3)
         const high = currentRecord()
         high[29] = 3
-        thinq.emit('data', reply([0x13], high))
+        thinq.onData(reply([0x13], high))
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'High')
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'High')
     })
 
     test('wrong-property and malformed replies do not release an active command', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('buzzer', 'Low')
         dev.setProperty('buzzer', 'High')
-        thinq.emit('data', reply([0x51], currentRecord()))
+        thinq.onData(reply([0x51], currentRecord()))
         const bad = reply([0x13], currentRecord())
         bad[bad.length - 2] ^= 1
-        thinq.emit('data', bad)
-        thinq.emit('data', reply([0x13, 0x13], currentRecord()))
+        thinq.onData(bad)
+        thinq.onData(reply([0x13, 0x13], currentRecord()))
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', reply([0x13], currentRecord()))
+        thinq.onData(reply([0x13], currentRecord()))
         assert.equal(thinq.outbox.length, 2)
     })
 
     test('pending bundle edits merge once with last value per setting', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('buzzer', 'Low')
         dev.setProperty('soil', 'Light')
         dev.setProperty('spin', 'Low')
         dev.setProperty('soil', 'Heavy')
-        thinq.emit('data', reply([0x13], currentRecord()))
+        thinq.onData(reply([0x13], currentRecord()))
         assert.equal(thinq.outbox.length, 2)
         const inner = thinq.outbox[1].subarray(2, -2)
         assert.equal(inner[6], 10)
@@ -2405,23 +2411,23 @@ describe('FAFXU22007 reconciled controls', () => {
         const actual = currentRecord()
         actual[1] = 5
         actual[4] = 13
-        thinq.emit('data', reply(BUNDLE_IDS, actual))
+        thinq.onData(reply(BUNDLE_IDS, actual))
         assert.equal(thinq.outbox.length, 2)
     })
 
     test('course and power are barriers and stale course reports cannot immediately revert a confirmed course', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('course', 'Bedding')
         const bedding = currentRecord(BEDDING)
-        thinq.emit('data', reply([0x0a], bedding))
+        thinq.onData(reply([0x0a], bedding))
         assert.equal(ha.devices[DEVICE_ID].properties.course, 'Bedding')
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.course, 'Bedding')
         const third = Buffer.from(EB_IDLE)
         third[15 + 5] = 35
         third[15 + 20] = 35
-        thinq.emit('data', checksum(third))
+        thinq.onData(checksum(third))
         assert.equal(ha.devices[DEVICE_ID].properties.course, 'Heavy Duty')
     })
 
@@ -2429,31 +2435,31 @@ describe('FAFXU22007 reconciled controls', () => {
         const now = Date.now()
         const clock = ctx.mock.method(Date, 'now', () => now)
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         const observed = ha.devices[DEVICE_ID].properties.remote_maintain
         const requested = observed === 'ON' ? 'OFF' : 'ON'
         dev.setProperty('remote_maintain', requested)
         assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, observed)
-        thinq.emit('data', shortFrame([0x20, 0, 0x25, 0]))
+        thinq.onData(shortFrame([0x20, 0, 0x25, 0]))
         assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, observed)
-        thinq.emit('data', shortFrame([0x20, 0, 0x24, 0]))
+        thinq.onData(shortFrame([0x20, 0, 0x24, 0]))
         assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, requested)
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, requested)
         clock.mock.mockImplementation(() => now + 30_001)
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, observed)
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
         dev.setProperty('power', 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
         const off = currentRecord()
         off[21] = 0
-        thinq.emit('data', reply([2], off))
+        thinq.onData(reply([2], off))
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
         clock.mock.mockImplementation(() => now + 60_002)
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
     })
@@ -2461,7 +2467,7 @@ describe('FAFXU22007 reconciled controls', () => {
     test('newer queued power and remote-maintain intent suppress older accepted feedback', () => {
         for (const key of ['power', 'remote_maintain']) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', EB_IDLE)
+            thinq.onData(EB_IDLE)
             const before = ha.devices[DEVICE_ID].properties[key]
             const first = before === 'ON' ? 'OFF' : 'ON'
             dev.setProperty(key, first)
@@ -2475,8 +2481,8 @@ describe('FAFXU22007 reconciled controls', () => {
             if (key === 'power') {
                 const actual = currentRecord()
                 actual[21] = first === 'OFF' ? 0 : 1
-                thinq.emit('data', reply([2], actual))
-            } else thinq.emit('data', shortFrame([0x20, 0, 0x24, 0]))
+                thinq.onData(reply([2], actual))
+            } else thinq.onData(shortFrame([0x20, 0, 0x24, 0]))
             assert.deepEqual(published, [])
             assert.equal(ha.devices[DEVICE_ID].properties[key], before)
             assert.equal(thinq.outbox.length, 2)
@@ -2492,12 +2498,12 @@ describe('FAFXU22007 reconciled controls', () => {
             return original(() => {}, 1_000_000).unref()
         }) as typeof setTimeout)
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         const before = ha.devices[DEVICE_ID].properties.remote_maintain
         dev.setProperty('remote_maintain', before === 'ON' ? 'OFF' : 'ON')
         dev.setProperty('remote_maintain', String(before))
         expire!()
-        thinq.emit('data', shortFrame([0x20, 0, 0x24, 0]))
+        thinq.onData(shortFrame([0x20, 0, 0x24, 0]))
         assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, before)
         assert.equal(thinq.outbox.length, 1)
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /timed out/)
@@ -2507,11 +2513,11 @@ describe('FAFXU22007 reconciled controls', () => {
     test('remote maintain refused or old-generation ACK never echoes', () => {
         for (const boundary of [false, true]) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', EB_IDLE)
+            thinq.onData(EB_IDLE)
             dev.setProperty('remote_maintain', 'ON')
-            if (boundary) thinq.emit('data', POWER_OFF)
+            if (boundary) thinq.onData(POWER_OFF)
             const before = ha.devices[DEVICE_ID].properties.remote_maintain
-            thinq.emit('data', shortFrame([0x20, 0, 0x24, boundary ? 0 : 3]))
+            thinq.onData(shortFrame([0x20, 0, 0x24, boundary ? 0 : 3]))
             assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, before)
         }
     })
@@ -2520,16 +2526,16 @@ describe('FAFXU22007 reconciled controls', () => {
         const now = Date.now()
         const clock = ctx.mock.method(Date, 'now', () => now)
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('buzzer', 'Low')
         const actual = currentRecord()
         actual[29] = 2
-        thinq.emit('data', reply([0x13], actual))
+        thinq.onData(reply([0x13], actual))
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Medium')
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Medium')
         clock.mock.mockImplementation(() => now + 30_001)
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Very High')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
     })
@@ -2537,20 +2543,20 @@ describe('FAFXU22007 reconciled controls', () => {
     test('a late old-generation reply cannot overwrite a new course or Off', () => {
         for (const boundary of [BEDDING, POWER_OFF]) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', EB_IDLE)
+            thinq.onData(EB_IDLE)
             dev.setProperty('buzzer', 'Low')
-            thinq.emit('data', boundary)
+            thinq.onData(boundary)
             const before = applianceProperties(ha.devices[DEVICE_ID].properties)
             const low = currentRecord()
             low[29] = 1
-            thinq.emit('data', reply([0x13], low))
+            thinq.onData(reply([0x13], low))
             assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), before)
         }
     })
 
     test('partial outcomes publish only accepted fields, not unrelated state', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('soil', 'Light')
         const actual = currentRecord()
         actual[1] = 1
@@ -2558,7 +2564,7 @@ describe('FAFXU22007 reconciled controls', () => {
         actual[29] = 0
         actual[21] = 0
         const results = BUNDLE_IDS.map((id) => (id === 0x21 ? 0x13 : 0))
-        thinq.emit('data', reply(BUNDLE_IDS, actual, results))
+        thinq.onData(reply(BUNDLE_IDS, actual, results))
         const p = ha.devices[DEVICE_ID].properties
         assert.equal(p.soil, 'Light')
         assert.equal(p.spin, 'High')
@@ -2574,12 +2580,12 @@ describe('FAFXU22007 reconciled controls', () => {
             return original(() => {}, 1_000_000).unref()
         }) as typeof setTimeout)
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('buzzer', 'Low')
         dev.setProperty('buzzer', 'High')
         expire!()
-        thinq.emit('data', reply([0x13], currentRecord()))
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(reply([0x13], currentRecord()))
+        thinq.onData(EB_IDLE)
         dev.setProperty('buzzer', 'Medium')
         dev.setProperty('power', 'OFF')
         assert.equal(thinq.outbox.length, 1)
@@ -2600,11 +2606,11 @@ describe('FAFXU22007 reconciled controls', () => {
 describe('FAFXU22007 newer reconciliation', () => {
     test('stale previous-course reports cannot replace accepted course defaults in a later bundle', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('course', 'Bedding')
         const bedding = currentRecord(BEDDING)
-        thinq.emit('data', reply([0x0a], bedding))
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(reply([0x0a], bedding))
+        thinq.onData(EB_IDLE)
         dev.setProperty('soil', 'Light')
         assert.equal(thinq.outbox.length, 2)
         const inner = thinq.outbox[1].subarray(2, -2)
@@ -2618,11 +2624,11 @@ describe('FAFXU22007 newer reconciliation', () => {
 
     test('queued Start uses the course confirmed by the preceding course command', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('course', 'Bedding')
         dev.setProperty('start', '')
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', reply([0x0a], currentRecord(BEDDING)))
+        thinq.onData(reply([0x0a], currentRecord(BEDDING)))
         assert.equal(thinq.outbox.length, 2)
         const inner = thinq.outbox[1].subarray(2, -2)
         assert.deepEqual([...inner.subarray(7, 11)], [0x0a, 13, 0x03, 1])
@@ -2631,12 +2637,12 @@ describe('FAFXU22007 newer reconciliation', () => {
 
     test('stale accepted power records cannot mask a later observed power state', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_IDLE)
+        thinq.onData(EB_IDLE)
         dev.setProperty('power', 'OFF')
-        thinq.emit('data', reply([0x02], currentRecord()))
+        thinq.onData(reply([0x02], currentRecord()))
         const off = Buffer.from(EB_IDLE)
         off[15 + 21] = 0
-        thinq.emit('data', checksum(off))
+        thinq.onData(checksum(off))
         assert.equal(ha.devices[DEVICE_ID].properties.status, 'Off')
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
     })

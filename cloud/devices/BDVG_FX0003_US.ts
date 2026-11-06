@@ -5,6 +5,7 @@ import { type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import AABBDevice, { type AwaitedWrite } from './aabb_device'
+import { LaundryMultiplexer } from './laundry_multiplexer'
 import { Enum } from '@/util/enum'
 import crc16 from '@/util/crc16'
 import { ENDING_MELODY } from './ending_melody'
@@ -279,7 +280,7 @@ const bit = (byte: number, mask: number) => ((byte & mask) !== 0 ? 1 : 0)
 export default class Device extends AABBDevice {
     protected override readonly ackAfterProcessing = true
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
-        super(HA, thinq, true)
+        super(HA, thinq, true, new LaundryMultiplexer(thinq, CLASS_BYTE))
         this.receipts = new ReceiptSupport(this)
         this.setConfig(
             allowExtendedType({

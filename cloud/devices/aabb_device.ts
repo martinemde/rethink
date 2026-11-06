@@ -2,6 +2,7 @@
 import HADevice from './base'
 import { Device as Thinq2Device } from '../thinq2/device'
 import { type Connection } from '../homeassistant'
+import type { LaundryMultiplexer, LaundryStream } from './laundry_multiplexer'
 
 // Frame types the cloud does not ack: the appliance's own acks, the c3 heartbeat, and the eb/ec status
 // records outside an envelope. Checked against the cloud, bridged as FAFXU22007 and Y_VB_Y___W.B32QEUK.
@@ -25,20 +26,41 @@ export type AwaitedWrite = { type: number; own: boolean; inner: Buffer }
 type QueuedWrite = { build: () => Buffer | undefined; coalescingKey?: string }
 
 export default class AABBDevice extends HADevice {
+    protected readonly stream?: LaundryStream
+    private readonly onDeviceData = (data: Buffer) => this.processData(data)
     constructor(
         HA: Connection,
         readonly thinq: Thinq2Device,
         // Ack every frame as the cloud would. Unacked, some appliances repeat each frame up to ten times and
         // the content sync never completes. Recommended: `true` for all new devices.
         readonly autoAck: boolean,
+        readonly mux?: LaundryMultiplexer,
     ) {
         super(HA, thinq.id, thinq.meta.modelId)
-        thinq.on('data', (data) => this.processData(data))
-        thinq.on('sendData', this.onSendData)
+        if (mux) {
+            thinq.setMux(mux)
+            thinq.on('sendData', this.onMuxSendData)
+            this.stream = mux.openStream()
+            this.stream.on('data', this.onDeviceData)
+            this.stream.onFailure = (writes) =>
+                this.writeTimedOut(
+                    writes.map((write) => ({
+                        type: write.inner[1],
+                        own: write.stream === this.stream,
+                        inner: write.inner,
+                    })),
+                )
+        } else {
+            thinq.on('data', this.onDeviceData)
+            thinq.on('sendData', this.onSendData)
+        }
     }
 
     drop() {
+        this.stream?.destroy()
+        this.thinq.off('data', this.onDeviceData)
         this.thinq.off('sendData', this.onSendData)
+        this.thinq.off('sendData', this.onMuxSendData)
         clearTimeout(this.writeTimer)
         this.writeTimer = undefined
         this.writeQueue.length = 0
@@ -56,7 +78,9 @@ export default class AABBDevice extends HADevice {
     }
 
     send(inner: Buffer) {
-        this.thinq.send_packet(AABBDevice.frame(inner))
+        const packet = AABBDevice.frame(inner)
+        if (this.stream) this.stream.send(Thinq2Device.packet(packet))
+        else this.thinq.send_packet(packet)
     }
 
     // One write at a time: the LG laundry machines answer a write that arrives while the previous one is
@@ -75,7 +99,7 @@ export default class AABBDevice extends HADevice {
     private writeBlocked = false
 
     protected get writesBlocked() {
-        return this.writeBlocked
+        return this.mux?.writesBlocked ?? this.writeBlocked
     }
 
     // Strict devices can clear pending model state and publish a diagnostic here. A late reply cannot
@@ -91,6 +115,10 @@ export default class AABBDevice extends HADevice {
     // Keys identify replaceable settings. An unkeyed entry is an action/order barrier: never coalesce
     // across it. Only unsent callbacks are replaced; model-owned pending values remain the model's job.
     protected queueWrite(build: () => Buffer | undefined, coalescingKey?: string) {
+        if (this.stream) {
+            this.stream.queueWrite(build, coalescingKey)
+            return
+        }
         if (this.writeBlocked) return
         if (coalescingKey !== undefined) {
             for (let i = this.writeQueue.length - 1; i >= 0; i--) {
@@ -110,6 +138,12 @@ export default class AABBDevice extends HADevice {
     // The next write goes out once processAABB returns, so a bundle built then includes what this one
     // changed.
     protected writeAnswered(type: number, matches?: (write: AwaitedWrite) => boolean): AwaitedWrite | undefined {
+        if (this.mux) {
+            const slot = this.mux.writeAnswered(type)
+            if (!slot) return undefined
+            const write = { type, own: slot.stream === this.stream, inner: slot.inner }
+            return !matches || matches(write) ? write : undefined
+        }
         if (this.writeBlocked) return undefined
         const i = this.awaiting.findIndex((w) => w.type === type)
         // Do not skip an older same-type write: replies have no sequence number. Models validate the
@@ -134,6 +168,12 @@ export default class AABBDevice extends HADevice {
         } finally {
             this.sendingOwn = false
         }
+    }
+
+    // Models may attach actual-send bookkeeping to writeType (e.g. dryer query context).
+    private readonly onMuxSendData = (type: 'packet' | 'ack', packet: Buffer) => {
+        if (type === 'packet' && packet.length >= 4 && packet[0] === 0xaa && packet[packet.length - 1] === 0xbb)
+            this.writeType(packet.subarray(2, packet.length - 2))
     }
 
     private readonly onSendData = (type: 'packet' | 'ack', buf: Buffer) => {
@@ -171,6 +211,11 @@ export default class AABBDevice extends HADevice {
         }
     }
 
+    private sendAck(packet: Buffer) {
+        if (this.stream) this.stream.send(Thinq2Device.ack(packet))
+        else this.thinq.send_ack(packet)
+    }
+
     // Envelopes (<class> 0a ...) are acked by sequence number, whatever their delivery class; other
     // types by type.
     private ack(inner: Buffer, longFrame: boolean) {
@@ -179,9 +224,9 @@ export default class AABBDevice extends HADevice {
         if (type === FRAME_TYPE_ENVELOPE) {
             if (inner.length - (longFrame ? 1 : 0) < ENVELOPE_MIN_LEN) return
             const seq = inner.subarray(ENVELOPE_SEQ_OFFSET, ENVELOPE_SEQ_OFFSET + 2)
-            this.thinq.send_ack(AABBDevice.frame(Buffer.from([...CLOUD_ACK, type, CLOUD_ACK_STATUS, ...seq])))
+            this.sendAck(AABBDevice.frame(Buffer.from([...CLOUD_ACK, type, CLOUD_ACK_STATUS, ...seq])))
         } else {
-            this.thinq.send_ack(AABBDevice.frame(Buffer.from([...CLOUD_ACK, type, CLOUD_ACK_STATUS])))
+            this.sendAck(AABBDevice.frame(Buffer.from([...CLOUD_ACK, type, CLOUD_ACK_STATUS])))
         }
     }
 

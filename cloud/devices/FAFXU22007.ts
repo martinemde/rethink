@@ -5,6 +5,7 @@ import { type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import AABBDevice, { type AwaitedWrite } from './aabb_device'
+import { LaundryMultiplexer } from './laundry_multiplexer'
 import { Enum } from '@/util/enum'
 import { ENDING_MELODY } from './ending_melody'
 import crc16 from '@/util/crc16'
@@ -480,7 +481,7 @@ export default class Device extends AABBDevice {
     }
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
-        super(HA, thinq, true)
+        super(HA, thinq, true, new LaundryMultiplexer(thinq, CLASS_BYTE))
         this.receipts = new ReceiptSupport(this)
         thinq.on('sendData', this.trackGeneration)
         this.setConfig(

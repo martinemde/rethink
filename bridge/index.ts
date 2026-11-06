@@ -14,6 +14,7 @@ import { Connection as Thinq2Connection } from './thinq2connection'
 import { Device as T1Downstream } from '@/cloud/thinq1/device'
 import { Device as T2Downstream } from '@/cloud/thinq2/device'
 import { TypedEmitter } from 'tiny-typed-emitter'
+import type { Stream } from '@/cloud/thinq2/multiplexer'
 
 type StatusCallback = (status: string) => void
 
@@ -42,7 +43,7 @@ class BridgedDevice extends TypedEmitter<BridgeDeviceEvents> {
             return
         }
 
-        downstream.on('data', this.onDownstreamData)
+        if (downstream instanceof T1Downstream) downstream.on('data', this.onDownstreamData)
         downstream.on('close', this.onDownstreamClose)
 
         this.reconnectNow()
@@ -51,6 +52,7 @@ class BridgedDevice extends TypedEmitter<BridgeDeviceEvents> {
     onDownstreamData: (packet: Buffer) => void
     onDownstreamClose: () => void
 
+    private stream?: Stream
     connection: Thinq1Connection | Thinq2Connection | undefined
 
     reconnectNow() {
@@ -63,14 +65,16 @@ class BridgedDevice extends TypedEmitter<BridgeDeviceEvents> {
 
             this.connection.on('data', (payload) => D.send(payload))
         } else if (U instanceof Thinq2Device && D instanceof T2Downstream) {
+            this.stream = D.openStream()
+            this.stream.on('data', this.onDownstreamData)
             // Forward the physical device's real deploy appInfo/platformInfo so the upstream
             // preDeploy reports its true protocolVer/softVer/etc. instead of placeholders.
             this.connection = new Thinq2Connection(U, D.deployAppInfo, D.deployPlatformInfo)
-            this.connection.on('data', (payload) => D.send_packet(payload))
+            this.connection.on('data', (payload) => this.stream?.send(T2Downstream.packet(payload)))
 
             if (!D.managed)
                 // forward bridge acks only for devices that lack a handler
-                this.connection.on('ack', (payload) => D.send_ack(payload))
+                this.connection.on('ack', (payload) => this.stream?.send(T2Downstream.ack(payload)))
         } else {
             console.warn("Can't connect bridge")
             return
@@ -84,6 +88,8 @@ class BridgedDevice extends TypedEmitter<BridgeDeviceEvents> {
     reconnectTimeout: NodeJS.Timeout | undefined
 
     disconnect() {
+        this.stream?.destroy()
+        this.stream = undefined
         this.#reportConnected(false)
 
         if (this.connection) {
@@ -95,6 +101,8 @@ class BridgedDevice extends TypedEmitter<BridgeDeviceEvents> {
     }
 
     destroy() {
+        this.stream?.destroy()
+        this.stream = undefined
         if (this.connection) {
             this.connection.destroy()
             this.connection = undefined

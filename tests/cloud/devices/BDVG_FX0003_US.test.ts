@@ -5,7 +5,8 @@ import AABBDevice from '@/cloud/devices/aabb_device'
 import { ENDING_MELODY } from '@/cloud/devices/ending_melody'
 import crc16 from '@/util/crc16'
 import type { Metadata } from '@/cloud/thinq'
-import { MockHAConnection, MockThinq2Device, buf, hex } from '@/tests/helpers/mocks'
+import { MockHAConnection, buf, hex } from '@/tests/helpers/mocks'
+import { MockLaundryDevice as MockThinq2Device, sendCloud } from '@/tests/helpers/laundry'
 
 const DEVICE_ID = 'test-id'
 const MODEL_ID = 'BDVG_FX0003_US'
@@ -656,7 +657,7 @@ function makeDevice() {
 
 function feed(frames: Buffer[]) {
     const { ha, thinq } = makeDevice()
-    for (const f of frames) thinq.emit('data', f)
+    for (const f of frames) thinq.onData(f)
     return applianceProperties(ha.devices[DEVICE_ID].properties)
 }
 
@@ -763,9 +764,9 @@ describe('BDVG_FX0003_US', () => {
 
     test('the chime follows the status broadcast, not the stale 0xE6 reply', () => {
         const { ha, thinq } = makeDevice()
-        thinq.emit('data', CHIME_LOW_0923)
+        thinq.onData(CHIME_LOW_0923)
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Low')
-        thinq.emit('data', E6_CHIME_STALE)
+        thinq.onData(E6_CHIME_STALE)
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Low')
     })
 
@@ -804,10 +805,10 @@ describe('BDVG_FX0003_US', () => {
         ]
         for (const [label, write, record] of cases) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', EB_CONNECT)
+            thinq.onData(EB_CONNECT)
             dev.setProperty('course', label)
             assert.deepEqual(thinq.outbox.map(hex), [hex(write)], label)
-            thinq.emit('data', record)
+            thinq.onData(record)
             assert.equal(ha.devices[DEVICE_ID].properties.course, label, label)
         }
     })
@@ -843,26 +844,26 @@ describe('BDVG_FX0003_US', () => {
         const { ha, thinq } = makeDevice()
         const p = () => ha.devices[DEVICE_ID].properties
 
-        thinq.emit('data', DRYING)
+        thinq.onData(DRYING)
         assert.equal(p().status, 'Drying')
         assert.equal(p().remaining_time, 10)
         assert.equal(p().remote_start, 'ON')
 
-        thinq.emit('data', ONE_MINUTE_IN)
+        thinq.onData(ONE_MINUTE_IN)
         assert.equal(p().remaining_time, 9)
         assert.equal(p().initial_time, 10)
         assert.equal(p().energy, 43)
 
-        thinq.emit('data', COOLING)
+        thinq.onData(COOLING)
         assert.equal(p().status, 'Cooling')
         assert.equal(p().remaining_time, 5)
 
-        thinq.emit('data', END)
+        thinq.onData(END)
         assert.equal(p().status, 'End remote maintain on')
         assert.equal(p().keep_remote_start, 'None')
         assert.equal(p().energy, 156)
 
-        thinq.emit('data', OFF_AFTER_END)
+        thinq.onData(OFF_AFTER_END)
         assert.equal(p().power, 'OFF')
         assert.equal(p().keep_remote_start, 'None')
         assert.equal(p().remaining_time, 'None')
@@ -871,10 +872,10 @@ describe('BDVG_FX0003_US', () => {
     test('accepted power replies do not publish requested power as reported state', () => {
         const { ha, thinq, dev } = makeDevice()
         dev.setProperty('power', 'ON')
-        thinq.emit('data', E6_REMOTE_ON_REPLY)
+        thinq.onData(E6_REMOTE_ON_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.power, undefined)
         dev.setProperty('power', 'OFF')
-        thinq.emit('data', E6_REMOTE_OFF_REPLY)
+        thinq.onData(E6_REMOTE_OFF_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.power, undefined)
     })
 
@@ -885,7 +886,7 @@ describe('BDVG_FX0003_US', () => {
     test('a chime reply does not confirm a pending power write', () => {
         const { ha, thinq, dev } = makeDevice()
         dev.setProperty('power', 'ON')
-        thinq.emit('data', E6_CHIME_REFUSED)
+        thinq.onData(E6_CHIME_REFUSED)
         assert.equal(ha.devices[DEVICE_ID].properties.power, undefined)
     })
 
@@ -899,7 +900,7 @@ describe('BDVG_FX0003_US', () => {
     test('setting the buzzer sends exactly what the ThinQ app sent', () => {
         for (const [i, level] of ['Off', 'Low', 'Medium', 'High', 'Very High'].entries()) {
             const { thinq, dev } = makeDevice()
-            thinq.emit('data', EB_CONNECT)
+            thinq.onData(EB_CONNECT)
             dev.setProperty('buzzer', level)
             const expected = buf(APP_CHIME[i])
             expected[7] = 0x34
@@ -913,23 +914,23 @@ describe('BDVG_FX0003_US', () => {
         dev.setProperty('power', 'ON')
         dev.setProperty('power', 'OFF')
         dev.setProperty('power', 'bogus')
-        thinq.emit('data', E6_REMOTE_ON_REPLY) // the next write waits for the reply to this one
+        thinq.onData(E6_REMOTE_ON_REPLY) // the next write waits for the reply to this one
         assert.deepEqual(thinq.outbox.map(hex), ['AA0DF0E5000201FF010201C7BB', 'AA0DF0E5000201FF010200C4BB'])
     })
 
     test('a write waits for a matching reply; timeout blocks queued writes until reconnect', (t) => {
         t.mock.timers.enable({ apis: ['setTimeout'] })
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('buzzer', 'Low')
         dev.setProperty('buzzer', 'Medium')
         dev.setProperty('buzzer', 'High')
         assert.deepEqual(thinq.outbox.map(hex), [hex(localChime(1))])
-        thinq.emit('data', E6_CHIME_STALE)
+        thinq.onData(E6_CHIME_STALE)
         assert.deepEqual(thinq.outbox.map(hex), [hex(localChime(1)), hex(localChime(3))])
         dev.setProperty('buzzer', 'Off')
         t.mock.timers.tick(3000)
-        thinq.emit('data', E6_CHIME_STALE)
+        thinq.onData(E6_CHIME_STALE)
         dev.setProperty('buzzer', 'Medium')
         assert.equal(thinq.outbox.length, 2)
     })
@@ -1011,7 +1012,7 @@ describe('BDVG_FX0003_US', () => {
         ]
         for (const [prop, value, write, before] of cases) {
             const { thinq, dev } = makeDevice()
-            thinq.emit('data', before ?? EB_CONNECT)
+            thinq.onData(before ?? EB_CONNECT)
             dev.setProperty(prop, value)
             assert.deepEqual(thinq.outbox.map(hex), [hex(write)], `${prop} = ${value}`)
         }
@@ -1043,7 +1044,7 @@ describe('BDVG_FX0003_US', () => {
         dev.setProperty('temp', 'Low')
         assert.deepEqual(thinq.outbox, [])
         assert.equal(ha.devices[DEVICE_ID].properties.problem_reason, 'No status from the dryer: try again')
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         assert.deepEqual(thinq.outbox, [])
     })
 
@@ -1057,10 +1058,10 @@ describe('BDVG_FX0003_US', () => {
 
     test('two quick changes: the second write carries the first, not the stale record', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', REC_000913) // Timed Dry, High, 10 minutes
+        thinq.onData(REC_000913) // Timed Dry, High, 10 minutes
         dev.setProperty('temp', 'Low')
         dev.setProperty('dry_time', '20')
-        thinq.emit('data', writeReply(thinq.outbox[0])) // only the matching bundle releases the next write
+        thinq.onData(writeReply(thinq.outbox[0])) // only the matching bundle releases the next write
         // aa <len> f0 e5 00 02 01 ff <count> <body> <chk> bb
         const body = (b: Buffer) => b.subarray(9, -2).toString('hex')
         assert.deepEqual(thinq.outbox.map(body), [
@@ -1071,7 +1072,7 @@ describe('BDVG_FX0003_US', () => {
 
     test('out-of-range values send nothing', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', REC_000913)
+        thinq.onData(REC_000913)
         for (const [prop, value] of [
             ['dry_time', '15'],
             ['dry_time', '110'],
@@ -1100,7 +1101,7 @@ describe('BDVG_FX0003_US', () => {
     test('validated incoming frames cause protocol ACKs without queries', () => {
         for (const frame of [EB_CONNECT, TIMED_DRY_30, DOOR_OPEN, CONTENT_LIST, REMOTE_START_ARMED, HELLO]) {
             const { thinq } = makeDevice()
-            thinq.emit('data', frame)
+            thinq.onData(frame)
             assert.equal(acks(thinq).length, 1)
             assert.deepEqual(thinq.outbox, [])
         }
@@ -1108,8 +1109,8 @@ describe('BDVG_FX0003_US', () => {
 
     test('the heartbeat and the cloud-style acks are not acked', () => {
         const { thinq } = makeDevice()
-        thinq.emit('data', HEARTBEAT)
-        thinq.emit('data', buf('aa0a30000b00ba7e42bb')) // the dryer acking a cloud poll
+        thinq.onData(HEARTBEAT)
+        thinq.onData(buf('aa0a30000b00ba7e42bb')) // the dryer acking a cloud poll
         assert.deepEqual(acks(thinq), [])
     })
 })
@@ -1168,21 +1169,21 @@ describe('BDVG_FX0003_US with the app writing through the bridge', () => {
     // The reply's record predates the write, so the app's change is known only from its write.
     test("a bundle from HA queued behind the app's carries what the app's changed", () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', PANEL_TIMED_DRY) // High
-        thinq.send_packet(buf(HA_TEMP_MEDIUM_WRITE)) // the same bytes as the app's
+        thinq.onData(PANEL_TIMED_DRY) // High
+        sendCloud(thinq, buf(HA_TEMP_MEDIUM_WRITE)) // the same bytes as the app's
         dev.setProperty('wrinkle_care', 'ON')
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', HA_TEMP_MEDIUM_REPLY)
+        thinq.onData(HA_TEMP_MEDIUM_REPLY)
         // aa <len> f0 e5 00 02 01 ff <count> <body> <chk> bb
         assert.equal(thinq.outbox[1].subarray(9, -2).toString('hex'), '20031e003f00340038003600' + '0f01' + '70000a')
     })
 
     test('a property the dryer refused is not taken in', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', PANEL_TIMED_DRY) // High
-        thinq.send_packet(buf(HA_TEMP_MEDIUM_WRITE))
+        thinq.onData(PANEL_TIMED_DRY) // High
+        sendCloud(thinq, buf(HA_TEMP_MEDIUM_WRITE))
         dev.setProperty('wrinkle_care', 'ON')
-        thinq.emit('data', STUCK_REFUSED)
+        thinq.onData(STUCK_REFUSED)
         assert.equal(thinq.outbox[1][10], 0x05) // temperature still High, as in the record
     })
 
@@ -1191,46 +1192,46 @@ describe('BDVG_FX0003_US with the app writing through the bridge', () => {
 
     test("the app's course change, with its bundle, is taken in before HA's bundle goes out", () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_AI_DRY)
-        thinq.send_packet(buf(APP_TIMED_DRY_WRITE))
+        thinq.onData(EB_AI_DRY)
+        sendCloud(thinq, buf(APP_TIMED_DRY_WRITE))
         dev.setProperty('wrinkle_care', 'ON')
-        thinq.emit('data', APP_TIMED_DRY_REPLY)
+        thinq.onData(APP_TIMED_DRY_REPLY)
         assert.equal(body(thinq.outbox[1]), '20041e003f00340038003600' + '0f01' + '70000a')
         assert.equal(ha.devices[DEVICE_ID].properties.course, 'Timed Dry')
     })
 
     test("a course change from HA takes in the new course's defaults from the reply", () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_AI_DRY)
+        thinq.onData(EB_AI_DRY)
         dev.setProperty('course', 'Timed Dry')
         dev.setProperty('wrinkle_care', 'ON')
-        thinq.emit('data', COURSE_TIMED_DRY_REPLY)
+        thinq.onData(COURSE_TIMED_DRY_REPLY)
         assert.equal(body(thinq.outbox[1]), '20051e003f00340038003600' + '0f01' + '70000a')
     })
 
     test('a bundle on Timed Dry carries no dry level, whatever the record said', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_TIMED_DRY_WITH_DRY_LEVEL)
+        thinq.onData(EB_TIMED_DRY_WITH_DRY_LEVEL)
         dev.setProperty('steam', 'ON')
         assert.equal(body(thinq.outbox[0]), '20041e003f01340038003600' + '0f01' + '70000a')
     })
 
     test('a bundle on another course carries no dry time', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_AI_DRY)
-        thinq.send_packet(buf(HA_TEMP_MEDIUM_WRITE)) // Timed Dry's 10 minutes, on AI Dry
+        thinq.onData(EB_AI_DRY)
+        sendCloud(thinq, buf(HA_TEMP_MEDIUM_WRITE)) // Timed Dry's 10 minutes, on AI Dry
         dev.setProperty('wrinkle_care', 'ON')
-        thinq.emit('data', HA_TEMP_MEDIUM_REPLY)
+        thinq.onData(HA_TEMP_MEDIUM_REPLY)
         assert.equal(body(thinq.outbox[1]).slice(-6), '700000')
     })
 
     test('after power-off, bundle writes wait for passive on-state evidence', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_TIMED_DRY_WITH_DRY_LEVEL)
-        thinq.emit('data', EVENT_POWER_OFF)
+        thinq.onData(EB_TIMED_DRY_WITH_DRY_LEVEL)
+        thinq.onData(EVENT_POWER_OFF)
         dev.setProperty('wrinkle_care', 'OFF')
         assert.deepEqual(thinq.outbox, [])
-        thinq.emit('data', EB_AI_DRY)
+        thinq.onData(EB_AI_DRY)
         assert.deepEqual(thinq.outbox, [])
         dev.setProperty('wrinkle_care', 'OFF')
         assert.equal(body(thinq.outbox[0]), '20041e033f00340038003600' + '0f00' + '700000')
@@ -1242,10 +1243,10 @@ describe('BDVG_FX0003_US with the app writing through the bridge', () => {
             const p = ha.devices[DEVICE_ID].properties
             return [p.problem, p.problem_reason]
         }
-        thinq.emit('data', EB_AI_DRY)
+        thinq.onData(EB_AI_DRY)
         dev.setProperty('dry_time', '30')
         assert.deepEqual(problem(ha), ['ON', 'Dry Time is for Timed Dry only'])
-        thinq.emit('data', EB_CONNECT) // Timed Dry
+        thinq.onData(EB_CONNECT) // Timed Dry
         dev.setProperty('dry_level', 'More')
         assert.deepEqual(problem(ha), ['ON', 'Timed Dry has no dry level'])
         assert.deepEqual(thinq.outbox, [])
@@ -1266,7 +1267,7 @@ describe('BDVG_FX0003_US problem sensor', () => {
 
     test('with no course, a bundle setting is not sent and the problem says why', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', STUCK_ON)
+        thinq.onData(STUCK_ON)
         dev.setProperty('dry_level', 'More')
         dev.setProperty('temp', 'Medium')
         dev.setProperty('wrinkle_care', 'ON')
@@ -1276,14 +1277,14 @@ describe('BDVG_FX0003_US problem sensor', () => {
 
     test('with no course, single-property writes still go out', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', STUCK_ON)
+        thinq.onData(STUCK_ON)
         dev.setProperty('course', 'Normal')
         assert.equal(thinq.outbox.length, 1)
     })
 
     test('while off, a bundle setting fails without asking for status', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', STUCK_OFF)
+        thinq.onData(STUCK_OFF)
         dev.setProperty('temp', 'Medium')
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(problem(ha), ['ON', 'The dryer is off'])
@@ -1291,9 +1292,9 @@ describe('BDVG_FX0003_US problem sensor', () => {
 
     test('a record with a course clears the no-course problem, and the bundle goes out again', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', STUCK_ON)
+        thinq.onData(STUCK_ON)
         dev.setProperty('temp', 'Medium')
-        thinq.emit('data', PANEL_TIMED_DRY)
+        thinq.onData(PANEL_TIMED_DRY)
         assert.deepEqual(problem(ha), ['OFF', 'OK'])
         dev.setProperty('temp', 'Medium')
         assert.deepEqual(thinq.outbox.map(hex), [HA_TEMP_MEDIUM_WRITE])
@@ -1301,44 +1302,44 @@ describe('BDVG_FX0003_US problem sensor', () => {
 
     test('a refused write is a problem until a write goes through', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', PANEL_TIMED_DRY)
+        thinq.onData(PANEL_TIMED_DRY)
         dev.setProperty('temp', 'Medium')
-        thinq.emit('data', STUCK_REFUSED)
+        thinq.onData(STUCK_REFUSED)
         assert.deepEqual(problem(ha), ['ON', 'Command refused (0x17)'])
         dev.setProperty('temp', 'Medium')
-        thinq.emit('data', HA_TEMP_MEDIUM_REPLY)
+        thinq.onData(HA_TEMP_MEDIUM_REPLY)
         assert.deepEqual(problem(ha), ['OFF', 'OK'])
     })
 
     test('a refusal is not cleared by the next record, only by a write that goes through', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('buzzer', 'Off')
-        thinq.emit('data', E6_CHIME_REFUSED)
-        thinq.emit('data', PANEL_TIMED_DRY)
+        thinq.onData(E6_CHIME_REFUSED)
+        thinq.onData(PANEL_TIMED_DRY)
         assert.deepEqual(problem(ha), ['ON', 'Command refused (0x03)'])
         dev.setProperty('buzzer', 'Off')
-        thinq.emit('data', E6_CHIME_STALE) // 0x10: accepted
+        thinq.onData(E6_CHIME_STALE) // 0x10: accepted
         assert.deepEqual(problem(ha), ['OFF', 'OK'])
     })
 
     test('a write that goes through publishes nothing while there is no problem', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('buzzer', 'Off')
         dev.setProperty('buzzer', 'Low')
-        thinq.emit('data', E6_CHIME_STALE)
-        thinq.emit('data', E6_CHIME_STALE)
+        thinq.onData(E6_CHIME_STALE)
+        thinq.onData(E6_CHIME_STALE)
         assert.equal(ha.devices[DEVICE_ID].properties.problem, undefined)
     })
 
     test("the reply to the app's write, sent through the bridge, is not taken for ours", () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.send_packet(buf(APP_CHIME[0]))
+        sendCloud(thinq, buf(APP_CHIME[0]))
         dev.setProperty('power', 'ON')
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', E6_CHIME_REFUSED)
+        thinq.onData(E6_CHIME_REFUSED)
         assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), { keep_remote_start: 'None' })
         assert.equal(thinq.outbox.length, 2)
     })
@@ -1388,7 +1389,7 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
             dev.setProperty('keep_remote_start', value)
             assert.deepEqual(thinq.outbox[thinq.outbox.length - 1], packet)
             assert.equal(publish.mock.callCount(), before)
-            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            thinq.onData(KEEP_REMOTE_START_REPLY)
             assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, value)
             assert.equal(
                 publish.mock.calls.filter((c) => c.arguments[1] === 'keep_remote_start').length,
@@ -1407,19 +1408,19 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(acks(thinq), [])
         for (const frame of [EB_CONNECT, END, OFF_AFTER_END]) {
-            thinq.emit('data', frame)
+            thinq.onData(frame)
             assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
             assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, undefined)
         }
         dev.setProperty('keep_remote_start', 'ON')
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
-        for (const frame of [OFF_AFTER_END, END, EB_CONNECT]) thinq.emit('data', frame)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
+        for (const frame of [OFF_AFTER_END, END, EB_CONNECT]) thinq.onData(frame)
         assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
         dev.drop()
         const reconnected = new MockThinq2Device(DEVICE_ID, META)
         const fresh = new DUT(ha.asConnection(), reconnected, META)
         fresh.start()
-        reconnected.emit('data', END)
+        reconnected.onData(END)
         assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
         assert.equal(ha.devices[DEVICE_ID].properties.status, 'End remote maintain on')
         assert.deepEqual(reconnected.outbox, [])
@@ -1429,19 +1430,19 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
     test('no status, power, course or Remote Start gate is added; invalid values send nothing', () => {
         for (const frame of [undefined, OFF_AFTER_END, DRYING, REMOTE_START_OFF]) {
             const { thinq, dev } = makeDevice()
-            if (frame) thinq.emit('data', frame)
+            if (frame) thinq.onData(frame)
             for (const invalid of ['', 'on', 'off', '1', '0', 'true', 'ON ', 'bogus'])
                 dev.setProperty('keep_remote_start', invalid)
             assert.deepEqual(thinq.outbox, [])
             dev.setProperty('keep_remote_start', 'ON')
             assert.deepEqual(thinq.outbox, [KEEP_REMOTE_START_ON])
-            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            thinq.onData(KEEP_REMOTE_START_REPLY)
             dev.drop()
         }
         const { thinq, dev } = makeDevice()
         const noCourse = Buffer.from(EB_CONNECT.subarray(15, 57))
         noCourse[5] = 0
-        thinq.emit('data', longFrame(0xeb, noCourse))
+        thinq.onData(longFrame(0xeb, noCourse))
         dev.setProperty('keep_remote_start', 'OFF')
         assert.deepEqual(thinq.outbox, [KEEP_REMOTE_START_OFF])
         dev.drop()
@@ -1450,13 +1451,13 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
     test('nonzero results retain prior ACK feedback and set only our diagnostic; success clears it', () => {
         const { ha, thinq, dev } = makeDevice()
         dev.setProperty('keep_remote_start', 'OFF')
-        thinq.emit('data', commandReply(3))
+        thinq.onData(commandReply(3))
         assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
         dev.setProperty('keep_remote_start', 'ON')
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         for (const result of [3, 0x10, 0x11, 0x13]) {
             dev.setProperty('keep_remote_start', 'OFF')
-            thinq.emit('data', commandReply(result))
+            thinq.onData(commandReply(result))
             assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
             assert.equal(ha.devices[DEVICE_ID].properties.problem, 'ON')
             assert.equal(
@@ -1465,7 +1466,7 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
             )
         }
         dev.setProperty('keep_remote_start', 'OFF')
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.problem, 'OFF')
         dev.drop()
@@ -1474,7 +1475,7 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
     test('unsolicited and malformed replies cannot publish or release a pending command', (t) => {
         const { ha, thinq, dev } = makeDevice()
         const publish = t.mock.method(ha, 'publishProperty')
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
         dev.setProperty('keep_remote_start', 'ON')
         dev.setProperty('keep_remote_start', 'OFF')
@@ -1492,35 +1493,35 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
             AABBDevice.frame(buf('3000240000')), // extra byte
             buf('aa083000e50092bb'), // E5 receipt, not this command's ACK
         ]) {
-            thinq.emit('data', frame)
+            thinq.onData(frame)
             assert.equal(thinq.outbox.length, 1)
             assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
         }
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
         assert.deepEqual(thinq.outbox, [KEEP_REMOTE_START_ON, KEEP_REMOTE_START_OFF])
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'OFF')
         const settingCalls = () => publish.mock.calls.filter((c) => c.arguments[1] === 'keep_remote_start').length
         const before = settingCalls()
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         assert.equal(settingCalls(), before) // no awaited write remains
         dev.drop()
     })
 
     test('known bridge writes update ACK feedback without changing our diagnostic', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('buzzer', 'Off')
-        thinq.emit('data', E6_CHIME_REFUSED)
+        thinq.onData(E6_CHIME_REFUSED)
         for (const packet of [KEEP_REMOTE_START_ON, KEEP_REMOTE_START_OFF]) {
-            thinq.send_packet(packet)
-            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            sendCloud(thinq, packet)
+            thinq.onData(KEEP_REMOTE_START_REPLY)
             assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, packet[6] === 1 ? 'ON' : 'OFF')
             assert.equal(ha.devices[DEVICE_ID].properties.problem, 'ON')
         }
-        thinq.send_packet(KEEP_REMOTE_START_ON)
-        thinq.emit('data', commandReply(3))
+        sendCloud(thinq, KEEP_REMOTE_START_ON)
+        thinq.onData(commandReply(3))
         assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.problem_reason, 'Command refused (0x03)')
         dev.drop()
@@ -1529,18 +1530,18 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
     test('generic type24 commands settle once without being mistaken for setting feedback', () => {
         for (const inner of ['f024110101', 'f024100201', 'f024100102', 'f0241001', 'f02410010100']) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.send_packet(AABBDevice.frame(buf(inner)))
-            thinq.send_packet(KEEP_REMOTE_START_ON)
+            sendCloud(thinq, AABBDevice.frame(buf(inner)))
+            sendCloud(thinq, KEEP_REMOTE_START_ON)
             dev.setProperty('keep_remote_start', 'OFF')
-            assert.equal(thinq.outbox.length, 2)
-            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            assert.equal(thinq.outbox.length, 1)
+            thinq.onData(KEEP_REMOTE_START_REPLY)
             assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
             assert.equal(thinq.outbox.length, 2) // second bridge command still awaits its own ACK
-            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            thinq.onData(KEEP_REMOTE_START_REPLY)
             assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
             assert.equal(thinq.outbox.length, 3)
             assert.deepEqual(thinq.outbox[2], KEEP_REMOTE_START_OFF)
-            thinq.emit('data', KEEP_REMOTE_START_REPLY)
+            thinq.onData(KEEP_REMOTE_START_REPLY)
             assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'OFF')
             dev.drop()
         }
@@ -1548,22 +1549,25 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
 
     test('a queued command waits for both an inflight E5 and a bridge command', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('buzzer', 'Low')
-        thinq.send_packet(KEEP_REMOTE_START_ON)
+        sendCloud(thinq, KEEP_REMOTE_START_ON)
         dev.setProperty('keep_remote_start', 'OFF')
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
-        assert.equal(thinq.outbox.length, 2)
+        thinq.onData(KEEP_REMOTE_START_REPLY) // cannot answer the active E5
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+        thinq.onData(writeReply(thinq.outbox[0]))
+        assert.deepEqual(thinq.outbox[1], KEEP_REMOTE_START_ON)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
-        thinq.emit('data', writeReply(thinq.outbox[0]))
         assert.deepEqual(thinq.outbox[2], KEEP_REMOTE_START_OFF)
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         dev.drop()
     })
 
     test('commands preserve course/default bundle order and are barriers to unsent bundle coalescing', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('buzzer', 'Low')
         dev.setProperty('course', 'Normal')
         dev.setProperty('temp', 'Low')
@@ -1572,18 +1576,18 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
         dev.setProperty('temp', 'High') // only this side of the command may coalesce
         dev.setProperty('keep_remote_start', 'OFF')
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', writeReply(thinq.outbox[0]))
+        thinq.onData(writeReply(thinq.outbox[0]))
         assert.equal(thinq.outbox[1][9], 0x0a)
         assert.equal(thinq.outbox[1][10], 7)
-        thinq.emit('data', writeReply(thinq.outbox[1], DIAL_NORMAL.subarray(57, 99)))
+        thinq.onData(writeReply(thinq.outbox[1], DIAL_NORMAL.subarray(57, 99)))
         assert.equal(thinq.outbox[2].subarray(9, -2).toString('hex'), '20011e033f003400380136000f00700000')
-        thinq.emit('data', writeReply(thinq.outbox[2]))
+        thinq.onData(writeReply(thinq.outbox[2]))
         assert.deepEqual(thinq.outbox[3], KEEP_REMOTE_START_ON)
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         assert.equal(thinq.outbox[4].subarray(9, -2).toString('hex'), '20051e033f003400380136000f00700000')
-        thinq.emit('data', writeReply(thinq.outbox[4]))
+        thinq.onData(writeReply(thinq.outbox[4]))
         assert.deepEqual(thinq.outbox[5], KEEP_REMOTE_START_OFF)
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         assert.equal(thinq.outbox.length, 6)
         dev.drop()
     })
@@ -1592,11 +1596,11 @@ describe('BDVG_FX0003_US Keep Remote Start On', () => {
         t.mock.timers.enable({ apis: ['setTimeout'] })
         const { ha, thinq, dev } = makeDevice()
         dev.setProperty('keep_remote_start', 'ON')
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         dev.setProperty('keep_remote_start', 'OFF')
         dev.setProperty('keep_remote_start', 'ON')
         t.mock.timers.tick(3000)
-        thinq.emit('data', KEEP_REMOTE_START_REPLY)
+        thinq.onData(KEEP_REMOTE_START_REPLY)
         dev.setProperty('keep_remote_start', 'OFF')
         dev.setProperty('power', 'ON')
         t.mock.timers.tick(60_000)
@@ -1612,27 +1616,27 @@ describe('BDVG_FX0003_US verified local enhancements', () => {
         const { ha, thinq } = makeDevice()
         const publish = t.mock.method(ha, 'publishProperty')
         const events = () => publish.mock.calls.filter((call) => call.arguments[1] === 'cycle_finished')
-        thinq.emit('data', finishFrame())
-        thinq.emit('data', END)
+        thinq.onData(finishFrame())
+        thinq.onData(END)
         assert.equal(events().length, 0)
-        thinq.emit('data', DRYING)
-        thinq.emit('data', END)
+        thinq.onData(DRYING)
+        thinq.onData(END)
         assert.equal(events().length, 0)
-        for (let i = 0; i < 10; i++) thinq.emit('data', finishFrame())
+        for (let i = 0; i < 10; i++) thinq.onData(finishFrame())
         assert.equal(events().length, 1)
         assert.deepEqual(events()[0].arguments.slice(2), [
             JSON.stringify({ event_type: 'finished' }),
             { retain: false },
         ])
-        thinq.emit('data', COOLING)
-        thinq.emit('data', finishFrame())
+        thinq.onData(COOLING)
+        thinq.onData(finishFrame())
         assert.equal(events().length, 2)
-        thinq.emit('data', EB_CONNECT) // Standby disarms and allows a new cycle
-        thinq.emit('data', COOLING)
-        thinq.emit('data', finishFrame())
+        thinq.onData(EB_CONNECT) // Standby disarms and allows a new cycle
+        thinq.onData(COOLING)
+        thinq.onData(finishFrame())
         assert.equal(events().length, 3)
-        thinq.emit('data', OFF_AFTER_END)
-        thinq.emit('data', finishFrame())
+        thinq.onData(OFF_AFTER_END)
+        thinq.onData(finishFrame())
         assert.equal(events().length, 3)
     })
 
@@ -1644,24 +1648,24 @@ describe('BDVG_FX0003_US verified local enhancements', () => {
                 const payload = Buffer.alloc(18)
                 payload.set([10, 10, 2, 4, 10, variant])
                 payload[16] = value
-                thinq.emit('data', longFrame(3, payload))
+                thinq.onData(longFrame(3, payload))
                 assert.equal(p.door, value === 1 ? 'ON' : 'OFF')
             }
         }
         const payload = Buffer.alloc(18)
         payload.set([10, 10, 2, 4, 11])
         payload[16] = 1
-        thinq.emit('data', longFrame(3, payload))
+        thinq.onData(longFrame(3, payload))
         assert.equal(p.door, 'OFF')
         payload[4] = 10
         payload[16] = 2
-        thinq.emit('data', longFrame(3, payload))
+        thinq.onData(longFrame(3, payload))
         assert.equal(p.door, 'OFF')
     })
 
     test('strict full-frame validation rejects CRC, lengths and malformed completion', () => {
         const { ha, thinq } = makeDevice()
-        thinq.emit('data', DRYING)
+        thinq.onData(DRYING)
         const before = applianceProperties(ha.devices[DEVICE_ID].properties)
         const badCRC = Buffer.from(EB_CONNECT)
         badCRC[20] ^= 1
@@ -1669,12 +1673,11 @@ describe('BDVG_FX0003_US verified local enhancements', () => {
         badLength[5] -= 1
         const badPayloadLength = Buffer.from(EB_CONNECT)
         badPayloadLength[14] -= 1
-        for (const packet of [badCRC, badLength, badPayloadLength, EB_CONNECT.subarray(0, -1)])
-            thinq.emit('data', packet)
+        for (const packet of [badCRC, badLength, badPayloadLength, EB_CONNECT.subarray(0, -1)]) thinq.onData(packet)
         const payload = Buffer.alloc(28)
         payload.set([3, 10, 2, 4, 3, 2])
-        thinq.emit('data', longFrame(3, payload))
-        thinq.emit('data', longFrame(3, Buffer.alloc(27)))
+        thinq.onData(longFrame(3, payload))
+        thinq.onData(longFrame(3, Buffer.alloc(27)))
         assert.deepEqual(applianceProperties(ha.devices[DEVICE_ID].properties), before)
         assert.deepEqual(thinq.outbox, [])
         assert.equal(acks(thinq).length, 3) // valid active report and two unknown, valid envelopes
@@ -1704,17 +1707,17 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
     const body = (b: Buffer) => b.subarray(9, -2).toString('hex')
     test('only exact property-set replies settle a bundle; malformed/duplicate replies cannot release it', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('temp', 'Low')
         dev.setProperty('dry_time', '20')
-        thinq.emit('data', E6_CHIME_STALE)
+        thinq.onData(E6_CHIME_STALE)
         assert.equal(thinq.outbox.length, 1)
         const wrong = writeReply(thinq.outbox[0])
         wrong[11] = wrong[9] // duplicate property, valid checksum
         wrong[wrong.length - 2] = (wrong.subarray(0, -2).reduce((a, b) => a + b, 0) & 0xff) ^ 0x55
-        thinq.emit('data', wrong)
+        thinq.onData(wrong)
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', writeReply(thinq.outbox[0]))
+        thinq.onData(writeReply(thinq.outbox[0]))
         assert.equal(thinq.outbox.length, 2)
         assert.equal(body(thinq.outbox[1]), '20011e003f003400380036000f00700014')
     })
@@ -1722,88 +1725,88 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
     test('mixed unsent bundle edits coalesce, retain accepted values across stale reports, and expire after 30s', (t) => {
         t.mock.timers.enable({ apis: ['Date'] })
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('temp', 'Low')
         dev.setProperty('temp', 'Medium')
         dev.setProperty('temp', 'Medium Low')
         dev.setProperty('dry_time', '20')
         dev.setProperty('steam', 'ON')
-        thinq.emit('data', writeReply(thinq.outbox[0]))
+        thinq.onData(writeReply(thinq.outbox[0]))
         assert.equal(thinq.outbox.length, 2)
         assert.equal(body(thinq.outbox[1]), '20021e003f013400380036000f00700014')
-        thinq.emit('data', writeReply(thinq.outbox[1]))
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(writeReply(thinq.outbox[1]))
+        thinq.onData(EB_CONNECT)
         dev.setProperty('wrinkle_care', 'ON')
         assert.equal(body(thinq.outbox[2]), '20021e003f013400380036000f01700014')
-        thinq.emit('data', writeReply(thinq.outbox[2]))
+        thinq.onData(writeReply(thinq.outbox[2]))
         t.mock.timers.tick(30_001)
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('wrinkle_care', 'OFF')
         assert.equal(body(thinq.outbox[3]), '20051e003f003400380036000f0070000a')
     })
 
     test('changed E6 values confirm state; stale E6 values never echo requests and pending newer intent wins', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         const p = ha.devices[DEVICE_ID].properties
         dev.setProperty('buzzer', 'Low')
-        thinq.emit('data', E6_CHIME_STALE) // captured record still has old chime
+        thinq.onData(E6_CHIME_STALE) // captured record still has old chime
         assert.equal(p.buzzer, 'Very High')
         dev.setProperty('buzzer', 'Medium')
         dev.setProperty('buzzer', 'High')
         const rec = Buffer.from(EB_CONNECT.subarray(15, 57))
         rec[19] = 2
-        thinq.emit('data', writeReply(thinq.outbox[1], rec))
+        thinq.onData(writeReply(thinq.outbox[1], rec))
         assert.equal(p.buzzer, 'Very High') // newer pending High suppresses Medium
         rec[19] = 3
-        thinq.emit('data', writeReply(thinq.outbox[2], rec))
+        thinq.onData(writeReply(thinq.outbox[2], rec))
         assert.equal(p.buzzer, 'High')
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         assert.equal(p.buzzer, 'High')
     })
 
     test('confirmed stale-report protection expires, and an actual Off boundary clears it', (t) => {
         t.mock.timers.enable({ apis: ['Date'] })
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('buzzer', 'Low')
         const rec = Buffer.from(EB_CONNECT.subarray(15, 57))
         rec[19] = 1
-        thinq.emit('data', writeReply(thinq.outbox[0], rec))
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(writeReply(thinq.outbox[0], rec))
+        thinq.onData(EB_CONNECT)
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Low')
         t.mock.timers.tick(30_001)
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Very High')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
         dev.setProperty('buzzer', 'Low')
-        thinq.emit('data', writeReply(thinq.outbox[1], rec))
-        thinq.emit('data', OFF_AFTER_END)
+        thinq.onData(writeReply(thinq.outbox[1], rec))
+        thinq.onData(OFF_AFTER_END)
         assert.notEqual(ha.devices[DEVICE_ID].properties.buzzer, 'Low')
     })
 
     test('course/Off boundaries prevent old replies restoring previous bundle context', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('temp', 'Low')
-        thinq.emit('data', DIAL_NORMAL)
-        thinq.emit('data', writeReply(thinq.outbox[0]))
+        thinq.onData(DIAL_NORMAL)
+        thinq.onData(writeReply(thinq.outbox[0]))
         dev.setProperty('wrinkle_care', 'ON')
         assert.equal(body(thinq.outbox[1]).slice(0, 4), '2004')
-        thinq.emit('data', OFF_AFTER_END)
-        thinq.emit('data', writeReply(thinq.outbox[1]))
+        thinq.onData(OFF_AFTER_END)
+        thinq.onData(writeReply(thinq.outbox[1]))
         dev.setProperty('wrinkle_care', 'OFF')
         assert.equal(thinq.outbox.length, 2)
     })
 
     test('accepted course ignores only the previous-course report during the bounded window', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_AI_DRY)
+        thinq.onData(EB_AI_DRY)
         dev.setProperty('course', 'Timed Dry')
-        thinq.emit('data', COURSE_TIMED_DRY_REPLY)
-        thinq.emit('data', EB_AI_DRY)
+        thinq.onData(COURSE_TIMED_DRY_REPLY)
+        thinq.onData(EB_AI_DRY)
         assert.equal(ha.devices[DEVICE_ID].properties.course, 'Timed Dry')
-        thinq.emit('data', DIAL_NORMAL)
+        thinq.onData(DIAL_NORMAL)
         assert.equal(ha.devices[DEVICE_ID].properties.course, 'Normal')
     })
 
@@ -1811,28 +1814,28 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
         const now = Date.now()
         const clock = ctx.mock.method(Date, 'now', () => now)
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('power', 'OFF')
         const off = Buffer.from(EB_CONNECT.subarray(15, 57))
         off[13] = 0
-        thinq.emit('data', writeReply(thinq.outbox[0], off))
+        thinq.onData(writeReply(thinq.outbox[0], off))
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
         clock.mock.mockImplementation(() => now + 30_001)
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
     })
 
     test('newer queued power intent suppresses older accepted reply feedback', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('power', 'OFF')
         dev.setProperty('power', 'ON')
         const off = Buffer.from(EB_CONNECT.subarray(15, 57))
         off[13] = 0
-        thinq.emit('data', writeReply(thinq.outbox[0], off))
+        thinq.onData(writeReply(thinq.outbox[0], off))
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
         assert.equal(thinq.outbox.length, 2)
         dev.drop()
@@ -1841,7 +1844,7 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
     test('power reply without record, stale record or refusal never echoes', () => {
         for (const variant of ['absent', 'stale', 'refused']) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', EB_CONNECT)
+            thinq.onData(EB_CONNECT)
             dev.setProperty('power', 'OFF')
             const rec = Buffer.from(EB_CONNECT.subarray(15, 57))
             if (variant === 'refused') rec[13] = 0
@@ -1904,7 +1907,7 @@ describe('BDVG_FX0003_US confirmed clock display', () => {
             const previous = Buffer.from(rec)
             previous[28] ^= 0x30
             for (const frame of [longFrame(0xeb, rec), longFrame(0xec, Buffer.concat([previous, rec]))]) {
-                thinq.emit('data', frame)
+                thinq.onData(frame)
                 assert.equal(ha.devices[DEVICE_ID].properties.clock_display, raw & 0x20 ? 'ON' : 'OFF')
                 assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, raw & 0x10 ? 'ON' : 'OFF')
             }
@@ -1917,12 +1920,12 @@ describe('BDVG_FX0003_US confirmed clock display', () => {
             ['ON', 'aa0df0e5000201ff015801bdbb'],
         ]) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', longFrame(0xeb, record(value !== 'ON')))
+            thinq.onData(longFrame(0xeb, record(value !== 'ON')))
             const before = ha.devices[DEVICE_ID].properties.clock_display
             dev.setProperty('clock_display', value)
             assert.deepEqual(thinq.outbox, [buf(expected)])
             assert.equal(ha.devices[DEVICE_ID].properties.clock_display, before)
-            thinq.emit('data', writeReply(thinq.outbox[0], record(value === 'ON')))
+            thinq.onData(writeReply(thinq.outbox[0], record(value === 'ON')))
             assert.equal(ha.devices[DEVICE_ID].properties.clock_display, value)
             dev.drop()
         }
@@ -1931,13 +1934,13 @@ describe('BDVG_FX0003_US confirmed clock display', () => {
     test('invalid payloads, removed buttons and absent/Off context cannot send or power on', () => {
         const { thinq, dev } = makeDevice()
         dev.setProperty('clock_display', 'OFF')
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         for (const value of ['', '0', '1', 'true', ' ', 'PRESS', 'on', 'off']) dev.setProperty('clock_display', value)
         for (const key of ['hide_clock', 'show_clock'])
             for (const value of ['', 'ON', 'OFF']) dev.setProperty(key, value)
         const off = record(true)
         off[13] = 0
-        thinq.emit('data', longFrame(0xeb, off))
+        thinq.onData(longFrame(0xeb, off))
         dev.setProperty('clock_display', 'OFF')
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(
@@ -1949,7 +1952,7 @@ describe('BDVG_FX0003_US confirmed clock display', () => {
     test('absent, stale and refused E6 records do not echo a requested value', () => {
         for (const variant of ['absent', 'stale', 'refused']) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', longFrame(0xeb, record(true)))
+            thinq.onData(longFrame(0xeb, record(true)))
             dev.setProperty('clock_display', 'OFF')
             thinq.emit(
                 'data',
@@ -1966,17 +1969,17 @@ describe('BDVG_FX0003_US confirmed clock display', () => {
 
     test('commands serialize, require exact property replies and suppress older feedback behind newer intent', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', longFrame(0xeb, record(true)))
+        thinq.onData(longFrame(0xeb, record(true)))
         dev.setProperty('clock_display', 'OFF')
         dev.setProperty('clock_display', 'ON')
         const wrong = Buffer.from(thinq.outbox[0])
         wrong[9] = 0x51
-        thinq.emit('data', writeReply(wrong, record(false)))
+        thinq.onData(writeReply(wrong, record(false)))
         assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', writeReply(thinq.outbox[0], record(false)))
+        thinq.onData(writeReply(thinq.outbox[0], record(false)))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
         assert.equal(thinq.outbox.length, 2)
-        thinq.emit('data', writeReply(thinq.outbox[1], record(true)))
+        thinq.onData(writeReply(thinq.outbox[1], record(true)))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
         dev.drop()
     })
@@ -1984,47 +1987,47 @@ describe('BDVG_FX0003_US confirmed clock display', () => {
     test('actual feedback protects against stale status for 30 seconds only', (t) => {
         t.mock.timers.enable({ apis: ['Date'] })
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', longFrame(0xeb, record(true)))
+        thinq.onData(longFrame(0xeb, record(true)))
         dev.setProperty('clock_display', 'OFF')
-        thinq.emit('data', writeReply(thinq.outbox[0], record(false)))
-        thinq.emit('data', longFrame(0xeb, record(true)))
+        thinq.onData(writeReply(thinq.outbox[0], record(false)))
+        thinq.onData(longFrame(0xeb, record(true)))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
         t.mock.timers.tick(30_001)
-        thinq.emit('data', longFrame(0xeb, record(true)))
+        thinq.onData(longFrame(0xeb, record(true)))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
     })
 
     test('matching passive status confirms a stale accepted record without requested echo', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', longFrame(0xeb, record(true)))
+        thinq.onData(longFrame(0xeb, record(true)))
         dev.setProperty('clock_display', 'OFF')
-        thinq.emit('data', writeReply(thinq.outbox[0], record(true)))
+        thinq.onData(writeReply(thinq.outbox[0], record(true)))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
-        thinq.emit('data', longFrame(0xeb, record(false)))
+        thinq.onData(longFrame(0xeb, record(false)))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
-        thinq.emit('data', longFrame(0xeb, record(true)))
+        thinq.onData(longFrame(0xeb, record(true)))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
     })
 
     test('course and Off boundaries clear feedback and prevent late old-context E6 restoration', () => {
         for (const boundary of ['course', 'off']) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', longFrame(0xeb, record(true)))
+            thinq.onData(longFrame(0xeb, record(true)))
             dev.setProperty('clock_display', 'OFF')
-            thinq.emit('data', writeReply(thinq.outbox[0], record(false)))
+            thinq.onData(writeReply(thinq.outbox[0], record(false)))
             const changed = record(true)
             if (boundary === 'course') changed[5] = changed[5] === 7 ? 21 : 7
             else changed[13] = 0
-            thinq.emit('data', longFrame(0xeb, changed))
+            thinq.onData(longFrame(0xeb, changed))
             assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
             dev.drop()
 
             const late = makeDevice()
-            late.thinq.emit('data', longFrame(0xeb, record(true)))
+            late.thinq.onData(longFrame(0xeb, record(true)))
             late.dev.setProperty('clock_display', 'OFF')
-            late.thinq.emit('data', longFrame(0xeb, changed))
-            late.thinq.emit('data', writeReply(late.thinq.outbox[0], record(false)))
+            late.thinq.onData(longFrame(0xeb, changed))
+            late.thinq.onData(writeReply(late.thinq.outbox[0], record(false)))
             assert.equal(late.ha.devices[DEVICE_ID].properties.clock_display, 'ON')
             late.dev.drop()
         }
@@ -2038,12 +2041,12 @@ describe('BDVG_FX0003_US confirmed clock display', () => {
             return original(() => {}, 1_000_000).unref()
         }) as typeof setTimeout)
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', longFrame(0xeb, record(true)))
+        thinq.onData(longFrame(0xeb, record(true)))
         dev.setProperty('clock_display', 'OFF')
         dev.setProperty('clock_display', 'ON')
         expire!()
-        thinq.emit('data', writeReply(thinq.outbox[0], record(false)))
-        thinq.emit('data', longFrame(0xeb, record(true)))
+        thinq.onData(writeReply(thinq.outbox[0], record(false)))
+        thinq.onData(longFrame(0xeb, record(true)))
         dev.setProperty('clock_display', 'OFF')
         assert.equal(thinq.outbox.length, 1)
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
@@ -2201,7 +2204,7 @@ describe('BDVG_FX0003_US ending melody', () => {
     test('all twelve options send one property50 command with no requested-value echo', () => {
         for (const [value, label] of ENDING_MELODY.options.entries()) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', EB_CONNECT)
+            thinq.onData(EB_CONNECT)
             dev.setProperty('melody', label)
             const expected = Buffer.from([0xaa, 13, 0xf0, 0xe5, 0, 2, 1, 0xff, 1, 0x50, value, 0, 0xbb])
             expected[11] = (expected.subarray(0, -2).reduce((a, b) => a + b, 0) & 0xff) ^ 0x55
@@ -2220,13 +2223,13 @@ describe('BDVG_FX0003_US ending melody', () => {
             const { ha, thinq, dev } = makeDevice()
             const before = Buffer.from(EB_CONNECT.subarray(15, 57))
             before[32] = (reply[11 + 32] + 1) % 12
-            thinq.emit('data', longFrame(0xeb, before))
+            thinq.onData(longFrame(0xeb, before))
             dev.setProperty('melody', label)
             assert.deepEqual(thinq.outbox, [command])
             assert.equal(ha.devices[DEVICE_ID].properties.melody, ENDING_MELODY.map(before[32]))
             assert.equal(reply.length, 55)
             assert.equal(reply[10], 0) // captured result00
-            thinq.emit('data', reply)
+            thinq.onData(reply)
             const p = ha.devices[DEVICE_ID].properties
             assert.equal(p.melody, label)
             assert.equal(p.splash_screen, 'Snowman 1') // unrelated reply fields are not feedback
@@ -2238,7 +2241,7 @@ describe('BDVG_FX0003_US ending melody', () => {
             assert.equal(report.readUInt16BE(13), 84)
             assert.equal(crc16(report.subarray(0, -3)), report.readUInt16BE(report.length - 3))
             assert.notEqual(report[15 + 32], report[15 + 42 + 32])
-            passive.thinq.emit('data', report)
+            passive.thinq.onData(report)
             const actual = passive.ha.devices[DEVICE_ID].properties
             assert.equal(actual.melody, label)
             assert.equal(actual.splash_screen, 'Halloween') // byte33 remains independent
@@ -2250,7 +2253,7 @@ describe('BDVG_FX0003_US ending melody', () => {
     test('missing, stale and refused records never echo; passive report publishes actual not requested', () => {
         for (const variant of ['absent', 'stale', 'refused']) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.emit('data', EB_CONNECT)
+            thinq.onData(EB_CONNECT)
             dev.setProperty('melody', 'Breeze')
             const rec = Buffer.from(MELODY_CAPTURES[variant === 'refused' ? 2 : 1].reply.subarray(11, -2))
             thinq.emit(
@@ -2262,7 +2265,7 @@ describe('BDVG_FX0003_US ending melody', () => {
                 ),
             )
             assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal')
-            thinq.emit('data', MELODY_CAPTURES[1].report)
+            thinq.onData(MELODY_CAPTURES[1].report)
             assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Vivaldi Winter')
             assert.equal(thinq.outbox.length, 1)
             dev.drop()
@@ -2272,9 +2275,9 @@ describe('BDVG_FX0003_US ending melody', () => {
     test('invalid labels and absent/Off status do not send commands or power on', () => {
         const { thinq, dev } = makeDevice()
         dev.setProperty('melody', 'Breeze')
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         for (const value of ['', '4', 'breeze', ' Breeze', 'ON', 'Unknown']) dev.setProperty('melody', value)
-        thinq.emit('data', OFF_AFTER_END)
+        thinq.onData(OFF_AFTER_END)
         dev.setProperty('melody', 'Breeze')
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(
@@ -2286,18 +2289,18 @@ describe('BDVG_FX0003_US ending melody', () => {
 
     test('wrong-property reply cannot settle melody or publish the requested value', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('melody', 'Breeze')
         dev.setProperty('melody', 'Vivaldi Winter')
         const wrong = Buffer.from(thinq.outbox[0])
         wrong[9] = 0x51
-        thinq.emit('data', writeReply(wrong, MELODY_CAPTURES[2].reply.subarray(11, -2)))
+        thinq.onData(writeReply(wrong, MELODY_CAPTURES[2].reply.subarray(11, -2)))
         assert.equal(thinq.outbox.length, 1)
         assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal')
-        thinq.emit('data', MELODY_CAPTURES[2].reply)
+        thinq.onData(MELODY_CAPTURES[2].reply)
         assert.equal(thinq.outbox.length, 2)
         assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal') // newer pending intent wins
-        thinq.emit('data', MELODY_CAPTURES[1].reply)
+        thinq.onData(MELODY_CAPTURES[1].reply)
         assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Vivaldi Winter')
         dev.drop()
     })
@@ -2305,23 +2308,23 @@ describe('BDVG_FX0003_US ending melody', () => {
     test('feedback is bounded and course/Off boundaries reject late prior-generation replies', (t) => {
         t.mock.timers.enable({ apis: ['Date'] })
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('melody', 'Breeze')
-        thinq.emit('data', MELODY_CAPTURES[2].reply)
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(MELODY_CAPTURES[2].reply)
+        thinq.onData(EB_CONNECT)
         assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Breeze')
         t.mock.timers.tick(30_001)
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         assert.equal(ha.devices[DEVICE_ID].properties.melody, 'Normal')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
         dev.drop()
 
         for (const boundary of [DIAL_NORMAL, OFF_AFTER_END]) {
             const late = makeDevice()
-            late.thinq.emit('data', EB_CONNECT)
+            late.thinq.onData(EB_CONNECT)
             late.dev.setProperty('melody', 'Breeze')
-            late.thinq.emit('data', boundary)
-            late.thinq.emit('data', MELODY_CAPTURES[2].reply)
+            late.thinq.onData(boundary)
+            late.thinq.onData(MELODY_CAPTURES[2].reply)
             assert.equal(late.ha.devices[DEVICE_ID].properties.melody, 'Normal')
             assert.equal(late.thinq.outbox.length, 1)
             late.dev.drop()
@@ -2332,29 +2335,29 @@ describe('BDVG_FX0003_US ending melody', () => {
 describe('BDVG_FX0003_US pending intent ownership', () => {
     test('an older dispatch cannot erase a newer same-property intent behind an action barrier', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('splash_screen', 'Normal') // blocker
         dev.setProperty('buzzer', 'Medium')
         dev.setProperty('pause', '')
         dev.setProperty('buzzer', 'Very High')
-        thinq.emit('data', writeReply(thinq.outbox[0]))
+        thinq.onData(writeReply(thinq.outbox[0]))
         const rec = Buffer.from(EB_CONNECT.subarray(15, 57))
         rec[19] = 2
-        thinq.emit('data', writeReply(thinq.outbox[1], rec))
+        thinq.onData(writeReply(thinq.outbox[1], rec))
         assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'Very High')
         assert.equal(thinq.outbox[2][9], 3) // Pause stays between buzzer edits
-        thinq.emit('data', writeReply(thinq.outbox[2]))
+        thinq.onData(writeReply(thinq.outbox[2]))
         assert.equal(thinq.outbox[3][10], 4)
     })
 
     test('singleton edits do not coalesce across an intervening bundle', () => {
         const { thinq, dev } = makeDevice()
-        thinq.emit('data', EB_CONNECT)
+        thinq.onData(EB_CONNECT)
         dev.setProperty('splash_screen', 'Normal')
         dev.setProperty('buzzer', 'Low')
         dev.setProperty('temp', 'Low')
         dev.setProperty('buzzer', 'High')
-        for (let i = 0; i < 3; i++) thinq.emit('data', writeReply(thinq.outbox[i]))
+        for (let i = 0; i < 3; i++) thinq.onData(writeReply(thinq.outbox[i]))
         assert.deepEqual(
             thinq.outbox.slice(1).map((packet) => packet[9]),
             [0x13, 0x20, 0x13],
@@ -2369,27 +2372,27 @@ test('downloaded course identity changes discard old-course reply overlays', () 
     const first = Buffer.from(EB_CONNECT.subarray(15, 57))
     first[5] = 0xff
     first[23] = 114
-    thinq.emit('data', longFrame(0xeb, first))
+    thinq.onData(longFrame(0xeb, first))
     dev.setProperty('temp', 'Low')
     const second = Buffer.from(first)
     second[23] = 140
     second[3] = 3
-    thinq.emit('data', longFrame(0xeb, second))
-    thinq.emit('data', writeReply(thinq.outbox[0]))
+    thinq.onData(longFrame(0xeb, second))
+    thinq.onData(writeReply(thinq.outbox[0]))
     dev.setProperty('wrinkle_care', 'ON')
     assert.equal(thinq.outbox[1][10], 3) // new downloaded course temperature, not old accepted Low
 })
 
 test('malformed E6 fixed header cannot settle an otherwise valid property reply', () => {
     const { thinq, dev } = makeDevice()
-    thinq.emit('data', EB_CONNECT)
+    thinq.onData(EB_CONNECT)
     dev.setProperty('buzzer', 'Low')
     dev.setProperty('buzzer', 'High')
     const reply = writeReply(thinq.outbox[0])
     reply[7] = 0x34 // reports use ff, even for local buzzer target34 writes
     reply[reply.length - 2] = (reply.subarray(0, -2).reduce((a, b) => a + b, 0) & 0xff) ^ 0x55
-    thinq.emit('data', reply)
+    thinq.onData(reply)
     assert.equal(thinq.outbox.length, 1)
-    thinq.emit('data', writeReply(thinq.outbox[0]))
+    thinq.onData(writeReply(thinq.outbox[0]))
     assert.equal(thinq.outbox.length, 2)
 })

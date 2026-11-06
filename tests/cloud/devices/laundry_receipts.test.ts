@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import Washer from '@/cloud/devices/FAFXU22007'
 import Dryer from '@/cloud/devices/BDVG_FX0003_US'
 import SideKick from '@/cloud/devices/MI2U7B'
-import { MockHAConnection, MockThinq2Device } from '@/tests/helpers/mocks'
+import { MockHAConnection } from '@/tests/helpers/mocks'
+import { MockLaundryDevice } from '@/tests/helpers/laundry'
 import crc16 from '@/util/crc16'
 
 function frame(classByte: number, type: number, payload: Buffer, sequence = 1) {
@@ -63,9 +64,12 @@ for (const c of cases)
         function setup() {
             const ha = new MockHAConnection()
             const meta = { modelId: c.modelId, modelName: 'Test', deviceType: '201' }
-            const thinq = new MockThinq2Device(c.modelId, meta)
+            const thinq = new MockLaundryDevice(c.modelId, meta)
             const dev = new c.Device(ha.asConnection(), thinq, meta)
             return { ha, thinq, dev, p: ha.devices[thinq.id].properties }
+        }
+        function receive(thinq: MockLaundryDevice, packet: Buffer) {
+            thinq.onData(packet)
         }
         function active() {
             const payload = Buffer.alloc(c.recordLength)
@@ -90,7 +94,7 @@ for (const c of cases)
             assert.deepEqual(thinq.sent, [])
             assert.deepEqual(thinq.outbox, [])
             const unknown = frame(c.classByte, 0x86, Buffer.alloc(4), 0x1234)
-            thinq.emit('data', unknown)
+            receive(thinq, unknown)
             assert.equal(p.last_report_at, new Date(now).toISOString())
             assert.deepEqual(thinq.sent, [{ cmd: 'ack', type: 1, data: 'AA0AF0000A041234ADBB' }])
             const receipt = p.last_report_at
@@ -105,7 +109,7 @@ for (const c of cases)
                 invalidFrames.push(malformed)
             }
             now++
-            for (const invalid of invalidFrames) thinq.emit('data', invalid)
+            for (const invalid of invalidFrames) receive(thinq, invalid)
             assert.equal(p.last_report_at, receipt)
             assert.equal(thinq.sent.length, 1)
             assert.equal(p.last_door_report_at, undefined)
@@ -119,35 +123,33 @@ for (const c of cases)
                 if (key === 'status') throw new Error('publish failed')
                 publish(id, key, value)
             })
-            assert.throws(() => thinq.emit('data', active()), /publish failed/)
+            assert.throws(() => receive(thinq, active()), /publish failed/)
             assert.deepEqual(thinq.sent, [])
             assert.deepEqual(thinq.outbox, [])
         })
 
         test('ACK follows completion publication and does not replay events on discovery', (t) => {
             const { ha, thinq, dev } = setup()
-            thinq.emit('data', active())
+            receive(thinq, active())
             const order: string[] = []
             const publish = ha.publishProperty.bind(ha)
             t.mock.method(ha, 'publishProperty', (id: string, key: string, value: string | number | undefined) => {
                 order.push(key)
                 publish(id, key, value)
             })
-            const send = thinq.send_ack.bind(thinq)
-            t.mock.method(thinq, 'send_ack', (data: Buffer) => {
-                order.push('ack')
-                send(data)
+            thinq.on('sendData', (type) => {
+                if (type === 'ack') order.push('ack')
             })
             const idle = Buffer.alloc(c.recordLength)
             idle[c.stateOffset] = 1
-            thinq.emit('data', frame(c.classByte, 0xeb, idle))
+            receive(thinq, frame(c.classByte, 0xeb, idle))
             order.length = 0
-            thinq.emit('data', active())
+            receive(thinq, active())
             assert.ok(order.indexOf('status') >= 0)
             assert.ok(order.indexOf('status') < order.indexOf('last_report_at'))
             assert.ok(order.indexOf('last_report_at') < order.indexOf('ack'))
             order.length = 0
-            thinq.emit('data', finish())
+            receive(thinq, finish())
             assert.ok(order.indexOf('cycle_finished') >= 0)
             assert.ok(order.indexOf('cycle_finished') < order.indexOf('last_report_at'))
             assert.ok(order.indexOf('last_report_at') < order.indexOf('ack'))
@@ -167,22 +169,22 @@ for (const c of cases)
                 original(id, key, value)
             })
             const open = frame(c.classByte, 3, c.door)
-            thinq.emit('data', open)
+            receive(thinq, open)
             assert.equal(p[c.doorKey], 'ON')
             assert.ok(calls.indexOf(c.doorKey) < calls.indexOf('last_door_report_at'))
-            thinq.emit('data', finish()) // an unarmed startup retry is not a completion
+            receive(thinq, finish()) // an unarmed startup retry is not a completion
             assert.equal(p.cycle_finished, undefined)
             now++
-            thinq.emit('data', active())
+            receive(thinq, active())
             now++
             calls.length = 0
-            thinq.emit('data', finish())
+            receive(thinq, finish())
             assert.equal(calls.filter((key) => key === 'cycle_finished').length, 1)
-            thinq.emit('data', finish())
+            receive(thinq, finish())
             assert.equal(calls.filter((key) => key === 'cycle_finished').length, 1)
             // A new active receipt arms the next completion even if idle was missed.
-            thinq.emit('data', active())
-            thinq.emit('data', finish())
+            receive(thinq, active())
+            receive(thinq, finish())
             assert.equal(calls.filter((key) => key === 'cycle_finished').length, 2)
             calls.length = 0
             const sends = thinq.sent.length
@@ -196,13 +198,13 @@ for (const c of cases)
             assert.equal(thinq.sent.length, sends)
             now++
             calls.length = 0
-            thinq.emit('data', open)
+            receive(thinq, open)
             assert.equal(p.last_report_at, new Date(now).toISOString())
             assert.equal(p.last_door_report_at, new Date(now).toISOString())
             assert.equal(calls.filter((key) => key === c.doorKey).length, 0)
             const next = setup()
             next.dev.start()
-            next.thinq.emit('data', finish())
+            receive(next.thinq, finish())
             assert.equal(next.p.cycle_finished, undefined)
             assert.equal(next.p.load_waiting, undefined)
             assert.equal(p.load_waiting, undefined)
