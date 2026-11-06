@@ -146,7 +146,10 @@ describe('FAFXU22007 verified local behavior', () => {
             assert.equal(p.drawer, bits & 4 ? 'OFF' : 'ON')
         }
         assert.deepEqual(thinq.outbox, [])
-        assert.deepEqual(thinq.sent.filter((message) => message.cmd !== 'ack'), [])
+        assert.deepEqual(
+            thinq.sent.filter((message) => message.cmd !== 'ack'),
+            [],
+        )
     })
 
     test('total time is byte16; remote start, lock and drawer have isolated masks', () => {

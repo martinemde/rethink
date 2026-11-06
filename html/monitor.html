@@ -8,11 +8,52 @@
             :root {
                 color-scheme: light;
                 background: #fff;
+                --ink: #14171c;
+                --muted: #5b6270;
+                --dim: #6e7581;
+                --line: #e2e5ea;
+                --rx: #1f5fbf;
+                --rx-tint: #dce7f8;
+                --rx-bg: #f3f7fd;
+                --rx-line: #c9d8f0;
+                --tx: #a1460a;
+                --tx-tint: #f7e2cf;
+                --tx-bg: #fdf6ef;
+                --tx-line: #eed6bf;
+                --unk: #7a4b00;
+                --unk-bg: #fff1cc;
+                --ok: #1e6e38;
+                --ok-bg: #e3f3e8;
+                --bad: #b3261e;
+                --bad-bg: #fde7e5;
+                --changed: #b88a00;
+                --mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
             }
 
-            nav .brand-logo .logo {
+            .monitor-header {
+                display: flex;
+                align-items: baseline;
+                gap: 20px;
+                padding: 8px 0;
+                flex-shrink: 0;
+            }
+            .monitor-home {
+                color: var(--ink);
+                white-space: nowrap;
+            }
+            .monitor-home img {
                 height: 1em;
                 vertical-align: -0.1em;
+            }
+            .device-details {
+                min-width: 0;
+                font-size: 0.85rem;
+                color: var(--muted);
+                overflow-wrap: anywhere;
+            }
+            .device-details summary {
+                cursor: pointer;
+                color: var(--ink);
             }
 
             .status_label {
@@ -31,63 +72,19 @@
             .flex_grow {
                 flex: 1;
             }
-            #messages {
-                border: solid 1px black;
-                border-radius: 8px;
-                padding: 8px;
-                overflow-y: scroll;
-                margin-bottom: 8px;
-            }
             body {
                 height: 100vh;
             }
 
-            .message {
-                clear: both;
-                border: solid 1px black;
-                border-radius: 4px;
-                padding: 2px 4px;
-                margin: 2px;
-                word-wrap: anywhere;
-            }
-
-            .tx.message {
-                float: right;
-                background: rgb(117, 42, 119);
-                color: white;
-            }
-            .rx.message {
-                float: left;
-                background: rgb(116, 171, 203);
-            }
-
-            .message.injected {
-                background: #c04040;
-            }
-
-            .message .typeLabel {
-                background: #ff80ff;
-                color: black;
-                margin: 0px 8px;
-                padding: 0px 4px;
-                border-radius: 4px;
-            }
-
-            .message .timestamp {
-                background: #ffff80;
-                color: black;
-                margin: 0px 8px;
-                padding: 0px 4px;
-            }
-            .rx.message .timestamp {
-                float: left;
-            }
-            .tx.message .timestamp {
-                float: right;
-            }
-
             .reduced_margins .input-field {
                 margin: 4px;
+            }
+
+            /* The stream and the inspector sit side by side, which Materialize's 70% container is too narrow for. */
+            .container.monitor-wide {
+                width: 96%;
+                max-width: 1600px;
+                min-height: 0;
             }
 
             /*
@@ -123,38 +120,609 @@
                 margin: 0;
             }
 
-            .monitor-controls .plain-toggle { display: inline-flex; align-items: center; gap: 6px; color: #263238; }
-            .plain-toggle input[type="checkbox"] { position: static; opacity: 1; pointer-events: auto; }
-            .message { float: none !important; color: #17222d !important; background: #f4f8fc !important; padding: 10px; }
-            .tx.message { border-left: 5px solid #785596; }
-            .rx.message { border-left: 5px solid #357aa2; }
-            .message.injected { border-color: #b71c1c; background: #fff1f1 !important; }
-            .packet-header { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
-            .packet-title { font-weight: 600; }
-            .packet-time, .packet-meta { font-size: .8rem; color: #455a64; }
-            .packet-raw { font-family: monospace; font-size: .85rem; overflow-wrap: anywhere; white-space: pre-wrap; }
-            .packet-segments { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0; }
-            .packet-segment { display: flex; flex-direction: column; border: 1px solid #a8bccb; border-radius: 4px; padding: 5px 7px; max-width: 100%; }
-            .packet-segment:nth-child(even) { background: #e5eef5; }
-            .packet-segment small { font-size: .75rem; color: #455a64; }
-            .packet-segment code { overflow-wrap: anywhere; }
-            .status-bytes { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 4px; margin-top: 8px; }
-            .status-byte { padding: 6px; border: 1px solid #a8bccb; border-radius: 4px; background: white; }
-            .status-byte.changed { border: 2px solid #b47300; background: #fff4d7; }
-            .status-byte.unknown { border-style: dashed; background: #f0edf4; }
-            .status-byte small { display: block; font-size: .72rem; line-height: 1.25; }
-            .status-byte code { display: block; font-weight: bold; margin: 3px 0; }
-            .packet-warning { color: #a13a17; }
-            .packet-summary { padding: 7px 0; }
-            .packet-decoded table { font-size: .85rem; }
-            .packet-decoded th, .packet-decoded td { padding: 5px 8px; }
-            .message details { margin-top: 7px; }
-            .message summary { cursor: pointer; }
-            #messages.raw-only .packet-decoded { display: none; }
-            #messages.hide-heartbeats .heartbeat { display: none; }
-            .injection-tools { border: 1px solid #b0bec5; border-radius: 5px; padding: 6px 10px; margin-bottom: 8px; }
-            .injection-tools summary { color: #8a3c22; cursor: pointer; }
-            .injection-tools p { font-size: .85rem; }
+            .monitor-controls .plain-toggle {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                color: #263238;
+            }
+            .plain-toggle input[type='checkbox'] {
+                position: static;
+                opacity: 1;
+                pointer-events: auto;
+            }
+            .lane-key {
+                display: inline-flex;
+                gap: 14px;
+                font-size: 0.8rem;
+                color: var(--muted);
+            }
+            .lane-key span::before {
+                content: '';
+                display: inline-block;
+                width: 10px;
+                height: 10px;
+                border-radius: 2px;
+                margin-right: 6px;
+                vertical-align: -1px;
+            }
+            .lane-key .rx::before {
+                background: var(--rx-tint);
+                border: 1px solid var(--rx);
+            }
+            .lane-key .tx::before {
+                background: var(--tx-tint);
+                border: 1px solid var(--tx);
+            }
+            .lane-key .unk::before {
+                background: var(--unk-bg);
+                border: 1px solid var(--unk);
+            }
+
+            /* Shared reset for the page's own buttons: Materialize only styles .btn, but browsers still add chrome. */
+            .plain-button {
+                font: inherit;
+                border: 0;
+                margin: 0;
+                cursor: pointer;
+                background: transparent;
+                color: inherit;
+            }
+            .plain-button:focus {
+                background-color: transparent;
+            }
+            .plain-button:focus-visible {
+                outline: 2px solid var(--rx);
+                outline-offset: 1px;
+            }
+            .small-button {
+                font-size: 0.8rem;
+                font-weight: 600;
+                padding: 6px 12px;
+                min-height: 32px;
+                border-radius: 6px;
+                border: 1px solid #d3d7de;
+                background: #fff;
+                color: var(--ink);
+            }
+            .small-button:focus {
+                background: #fff;
+            }
+            .link-button {
+                font-size: 0.8rem;
+                color: var(--muted);
+                text-decoration: underline;
+                text-underline-offset: 2px;
+                padding: 4px 0;
+            }
+
+            /* Selection bar */
+            .selection-bar {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 6px 12px;
+                min-height: 44px;
+                padding: 6px 10px;
+                margin-bottom: 8px;
+                border-radius: 8px;
+                background: #eef0f3;
+                color: var(--muted);
+                font-size: 0.85rem;
+            }
+            .selection-bar.active {
+                background: var(--ink);
+                color: #fff;
+            }
+            .selection-bar .range {
+                font-family: var(--mono);
+                font-weight: 700;
+            }
+            .selection-bar .spacer {
+                flex: 1 1 auto;
+            }
+            .selection-bar.active .small-button.secondary {
+                background: transparent;
+                color: #fff;
+                border-color: #8a909b;
+            }
+            .selection-bar.active .link-button {
+                color: #fff;
+            }
+
+            /* Stream + inspector */
+            .monitor-main > * {
+                box-sizing: border-box;
+                width: calc((100% - 12px) / 2);
+            }
+            .monitor-main {
+                display: flex;
+                gap: 12px;
+                min-height: 0;
+                margin-bottom: 8px;
+            }
+            .stream-wrap {
+                position: relative;
+                flex: 0 0 auto;
+                min-width: 0;
+                display: flex;
+                flex-direction: column;
+            }
+            #messages {
+                flex: 1;
+                min-height: 0;
+                overflow-y: auto;
+                border: 1px solid var(--line);
+                border-radius: 10px;
+                padding: 8px;
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+            }
+            #messages:empty::before {
+                content: 'No frames yet.';
+                color: var(--muted);
+                padding: 8px;
+            }
+
+            .frame {
+                display: flex;
+                align-items: stretch;
+                gap: 8px;
+                border-radius: 6px;
+                padding: 1px 6px 1px 0;
+                cursor: pointer;
+            }
+            .frame.in-range {
+                background: #eef0f3;
+            }
+            .frame-num {
+                flex: 0 0 auto;
+                display: flex;
+                align-items: center;
+                justify-content: flex-start;
+                gap: 6px;
+                min-height: 32px;
+                padding: 4px;
+                font: 500 11px var(--mono);
+                color: var(--muted);
+                cursor: pointer;
+                user-select: none;
+                -webkit-user-select: none;
+            }
+            .frame-num input[type='checkbox'] {
+                position: static;
+                opacity: 1;
+                pointer-events: auto;
+                width: 16px;
+                height: 16px;
+                accent-color: var(--rx);
+            }
+            .frame-num input:focus-visible {
+                outline: 2px solid var(--rx);
+                outline-offset: 2px;
+            }
+            .frame-lane {
+                flex: 1 1 auto;
+                min-width: 0;
+                display: flex;
+                padding: 2px 0;
+            }
+            .frame.tx .frame-lane {
+                justify-content: flex-end;
+            }
+            .bubble {
+                max-width: 70%;
+                min-width: 0;
+                border-radius: 8px;
+                padding: 3px 10px 4px;
+            }
+            .frame.rx .bubble {
+                background: var(--rx-bg);
+                border: 1px solid var(--rx-line);
+                border-left: 3px solid var(--rx);
+            }
+            .frame.tx .bubble {
+                background: var(--tx-bg);
+                border: 1px solid var(--tx-line);
+                border-right: 3px solid var(--tx);
+            }
+            .frame.injected .bubble {
+                border-style: dashed;
+            }
+            .frame.focused .bubble {
+                outline: 2px solid currentColor;
+                outline-offset: 1px;
+            }
+            .frame.rx {
+                color: var(--rx);
+            }
+            .frame.tx {
+                color: var(--tx);
+            }
+            .frame-meta {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 2px 8px;
+                font-size: 11px;
+                color: var(--muted);
+                user-select: none;
+                -webkit-user-select: none;
+            }
+            .frame.tx .frame-meta {
+                justify-content: flex-end;
+            }
+            .frame-label {
+                font-weight: 600;
+                padding: 2px 6px;
+                margin-left: -6px;
+                border-radius: 4px;
+            }
+            .frame.rx .frame-label {
+                color: var(--rx);
+            }
+            .frame.tx .frame-label {
+                color: var(--tx);
+            }
+            .frame.focused .frame-label {
+                background: #fff;
+            }
+            .frame-warning {
+                color: var(--bad);
+                font-weight: 600;
+            }
+            .frame-time {
+                font-family: var(--mono);
+            }
+            .frame-hex {
+                font: 13px/1.7 var(--mono);
+                word-break: break-all;
+                color: var(--ink);
+            }
+            .frame-dir {
+                display: none;
+            }
+
+            /* Byte chunks, shared by the stream and the inspector's table. Gaps are margins, not spaces, so a
+               drag-select copies clean hex. */
+            .chunk {
+                margin-right: 6px;
+                border-radius: 3px;
+                cursor: help;
+            }
+            .chunk:hover {
+                outline: 1.5px solid currentColor;
+                outline-offset: 1px;
+            }
+            .k-frame,
+            .k-previous {
+                color: var(--dim);
+            }
+            .k-type {
+                font-weight: 700;
+                color: var(--ink);
+            }
+            .k-field,
+            .k-flags,
+            .k-inferred {
+                padding: 1px 3px;
+            }
+            .frame.rx .k-field,
+            .frame.rx .k-flags,
+            .inspector.rx .k-field,
+            .inspector.rx .k-flags {
+                color: var(--rx);
+                background: var(--rx-tint);
+            }
+            .frame.tx .k-field,
+            .frame.tx .k-flags,
+            .inspector.tx .k-field,
+            .inspector.tx .k-flags {
+                color: var(--tx);
+                background: var(--tx-tint);
+            }
+            /* Inferred: lane colour like a mapped field, but dotted to say the meaning is a guess. */
+            .frame.rx .k-inferred,
+            .inspector.rx .k-inferred {
+                color: var(--rx);
+            }
+            .frame.tx .k-inferred,
+            .inspector.tx .k-inferred {
+                color: var(--tx);
+            }
+            .k-inferred {
+                text-decoration: underline dotted;
+                text-underline-offset: 3px;
+            }
+            .byte-map td.k-inferred {
+                text-decoration: none;
+                background: repeating-linear-gradient(135deg, #fff 0 4px, #eef0f3 4px 6px);
+            }
+            .byte-map td.pad {
+                background: none;
+            }
+            .k-check {
+                padding: 1px 3px;
+                color: var(--ok);
+                background: var(--ok-bg);
+            }
+            .k-bad {
+                padding: 1px 3px;
+                color: var(--bad);
+                background: var(--bad-bg);
+                font-weight: 700;
+            }
+            .k-unknown,
+            .k-flags-unknown {
+                color: var(--dim);
+            }
+            .k-unknown .nz,
+            .k-flags-unknown {
+                color: var(--unk);
+                background: var(--unk-bg);
+                border-radius: 2px;
+                font-weight: 700;
+            }
+
+            /* Plain mode: one line of text per frame, nothing else, so a copy reads as a back-and-forth. */
+            #messages.raw-only .frame-meta {
+                display: none;
+            }
+            #messages.raw-only .frame-dir {
+                display: inline;
+            }
+            #messages.raw-only .bubble {
+                background: none;
+                border: 0;
+                padding: 2px 0;
+            }
+            #messages.raw-only .frame-hex,
+            #messages.raw-only .chunk,
+            #messages.raw-only .chunk .nz {
+                color: inherit;
+                background: none;
+                margin: 0;
+                padding: 0;
+                font-weight: 400;
+                outline: 0;
+                cursor: text;
+            }
+            #messages.hide-heartbeats .heartbeat {
+                display: none;
+            }
+
+            .hold-pill {
+                position: absolute;
+                left: 50%;
+                bottom: 14px;
+                transform: translateX(-50%);
+                border-radius: 18px;
+                box-shadow: 0 2px 8px rgba(20, 23, 28, 0.15);
+                white-space: nowrap;
+            }
+            .hold-pill[hidden] {
+                display: none;
+            }
+
+            /* Inspector */
+            .inspector {
+                flex: 0 0 auto;
+                min-width: 0;
+                overflow: auto;
+                border: 1px solid var(--line);
+                border-radius: 10px;
+                padding: 14px;
+                font-size: 0.85rem;
+                color: var(--ink);
+            }
+            .inspector-empty {
+                color: var(--muted);
+            }
+            .inspector h5 {
+                font-size: 1.1rem;
+                font-weight: 600;
+                margin: 2px 0 4px;
+            }
+            .inspector .dir {
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+            }
+            .inspector.rx .dir {
+                color: var(--rx);
+            }
+            .inspector.tx .dir {
+                color: var(--tx);
+            }
+            .inspector .meta {
+                color: var(--muted);
+                font-size: 0.8rem;
+            }
+            .inspector .note {
+                color: var(--muted);
+                font-size: 0.8rem;
+                margin: 4px 0;
+            }
+            .inspector .warning {
+                color: var(--bad);
+                font-weight: 600;
+            }
+            .inspector .actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                align-items: center;
+                margin: 10px 0;
+            }
+            .byte-map {
+                overflow-x: auto;
+                margin: 8px 0 12px;
+            }
+            .byte-map table,
+            .field-table {
+                border-collapse: separate;
+                border-spacing: 0;
+                width: auto;
+                font-family: var(--mono);
+            }
+            .byte-map tr,
+            .field-table tr {
+                border: 0;
+            }
+            .byte-map th {
+                font: 500 10px var(--mono);
+                color: var(--muted);
+                padding: 0 6px 0 0;
+                text-align: left;
+            }
+            .byte-map thead th {
+                text-align: center;
+                padding: 0 0 2px;
+            }
+            .byte-map td {
+                width: 30px;
+                height: 26px;
+                padding: 0;
+                text-align: center;
+                font-size: 12px;
+                border: 0 solid #fff;
+                border-left-width: 2px;
+                border-right-width: 2px;
+                border-bottom-width: 3px;
+                border-radius: 4px;
+            }
+            .byte-map td.join-left {
+                border-left-width: 0;
+                border-top-left-radius: 0;
+                border-bottom-left-radius: 0;
+            }
+            .byte-map td.join-right {
+                border-right-width: 0;
+                border-top-right-radius: 0;
+                border-bottom-right-radius: 0;
+            }
+            .byte-map td.k-frame,
+            .byte-map td.k-previous {
+                background: #f1f2f4;
+            }
+            .byte-map td.k-type {
+                background: #e6e8ec;
+            }
+            .byte-map td.multi {
+                box-shadow: inset 0 -3px 0 currentColor;
+            }
+            .byte-map td.k-unknown {
+                color: #5f6672;
+                background: repeating-linear-gradient(135deg, #f6f7f9 0 4px, #e9ebef 4px 6px);
+            }
+            .byte-map td.k-unknown.nz,
+            .byte-map td.k-flags-unknown {
+                color: var(--unk);
+                font-weight: 700;
+                background: repeating-linear-gradient(135deg, #fff1cc 0 4px, #ffe2a0 4px 6px);
+            }
+            .byte-map td.changed {
+                box-shadow: inset 0 0 0 2px var(--changed);
+            }
+            .field-table-wrap {
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                overflow: auto;
+                max-height: 340px;
+            }
+            .field-table {
+                width: 100%;
+                font-family: inherit;
+                font-size: 0.8rem;
+            }
+            .field-table th {
+                position: sticky;
+                top: 0;
+                background: #f6f7f9;
+                color: var(--muted);
+                font-weight: 600;
+                text-align: left;
+                padding: 5px 8px;
+            }
+            .field-table td {
+                padding: 4px 8px;
+                border-top: 1px solid #eef0f3;
+                vertical-align: top;
+            }
+            .field-table td.mono {
+                font-family: var(--mono);
+                white-space: nowrap;
+            }
+            .field-table td.off {
+                color: var(--muted);
+            }
+            .field-table tr.unknown td.name {
+                color: var(--unk);
+                font-style: italic;
+            }
+            .field-table tr.bit td {
+                border-top: 0;
+                padding-top: 0;
+                color: var(--muted);
+            }
+            .field-table tr.changed td.name::after {
+                content: ' · changed';
+                color: var(--changed);
+                font-weight: 600;
+                font-style: normal;
+            }
+            .inspector details {
+                margin-top: 12px;
+                color: var(--muted);
+            }
+            .inspector summary {
+                cursor: pointer;
+            }
+            .inspector pre {
+                margin: 8px 0 4px;
+                max-height: 220px;
+                overflow: auto;
+                background: #f6f7f9;
+                color: var(--ink);
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                padding: 8px 10px;
+                font: 12px/1.5 var(--mono);
+                white-space: pre;
+            }
+
+            .injection-tools {
+                border: 1px solid #b0bec5;
+                border-radius: 5px;
+                padding: 6px 10px;
+                margin-bottom: 8px;
+            }
+            .injection-tools summary {
+                color: #8a3c22;
+                cursor: pointer;
+            }
+            .injection-tools p {
+                font-size: 0.85rem;
+            }
+
+            @media (max-width: 900px) {
+                .monitor-main > * {
+                    width: 100%;
+                }
+                .monitor-main {
+                    flex-direction: column;
+                }
+                .stream-wrap {
+                    flex: 1 1 auto;
+                    min-height: 50vh;
+                }
+                .inspector {
+                    flex: 0 0 auto;
+                    max-height: 45vh;
+                }
+            }
         </style>
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
         <link
@@ -166,23 +734,20 @@
     </head>
 
     <body class="flex_y">
-        <nav class="light-blue lighten-1" role="navigation">
-            <div class="nav-wrapper container">
-                <a id="logo-container" href="/" class="brand-logo">
-                    <img class="logo" src="logo.svg" alt="" />
-                    Rethink <span class="hide-on-med-and-down">management panel</span>
-                </a>
-            </div>
-        </nav>
-        <div class="container">
-            <h4 class="header orange-text">Device status</h4>
-            <span class="status_label">Device ID:</span> <span id="device_id" class="status_value"></span> <br />
-            <span class="status_label">Device model:</span> <span id="device_model" class="status_value"></span> <br />
-            <span class="status_label">Status:</span> <span id="device_status" class="status_value"></span> <br />
-        </div>
+        <header class="container monitor-wide monitor-header">
+            <a href="/" class="monitor-home"><img src="logo.svg" alt="" /> Rethink</a>
+            <details class="device-details">
+                <summary>Device details · <span id="device_status" role="status"></span></summary>
+                <div>
+                    <span class="status_label">Device ID:</span> <span id="device_id" class="status_value"></span>
+                </div>
+                <div>
+                    <span class="status_label">Device model:</span> <span id="device_model" class="status_value"></span>
+                </div>
+            </details>
+        </header>
 
-        <div class="reduced_margins container flex_y flex_grow" style="overflow: hidden">
-            <h4 class="header orange-text">Messages</h4>
+        <div class="reduced_margins container monitor-wide flex_y flex_grow" style="overflow: hidden">
             <div class="monitor-controls">
                 <label class="plain-toggle"><input id="decode_packets" type="checkbox" checked /> Decode packets</label>
                 <label class="plain-toggle"><input id="hide_heartbeats" type="checkbox" /> Hide heartbeats</label>
@@ -194,35 +759,50 @@
                         <label><input id="autoscroll" type="checkbox" checked /> <span class="lever"></span></label>
                     </span>
                 </span>
+                <span class="lane-key" aria-hidden="true">
+                    <span class="rx">Device → rethink</span>
+                    <span class="tx">Rethink → device</span>
+                    <span class="unk">Unmapped</span>
+                </span>
             </div>
-            <div class="flex_grow" id="messages"></div>
+            <div id="selection_bar" class="selection-bar" aria-live="polite"></div>
+            <div class="monitor-main flex_grow">
+                <div class="stream-wrap">
+                    <div id="messages" aria-label="Frames"></div>
+                    <button id="hold_pill" class="plain-button small-button hold-pill" type="button" hidden></button>
+                </div>
+                <aside id="inspector" class="inspector" aria-label="Frame details"></aside>
+            </div>
             <details class="injection-tools">
                 <summary>Advanced packet injection</summary>
-                <p>Sending can operate the appliance. Injecting a report can change Home Assistant state or trigger automations. Decoding above is passive.</p>
-            <div class="flex_x">
-                <div class="input-field flex_grow">
-                    <input id="send1" type="text" />
-                    <label for="send1">Send to device</label>
+                <p>
+                    Sending can operate the appliance. Injecting a report can change Home Assistant state or trigger
+                    automations. Decoding above is passive.
+                </p>
+                <div class="flex_x">
+                    <div class="input-field flex_grow">
+                        <input id="send1" type="text" />
+                        <label for="send1">Send to device (rethink → device)</label>
+                    </div>
+                    &nbsp;
+                    <div class="input-field">
+                        <button disabled class="btn waves-effect waves-light" id="btn_send1">
+                            Send <i class="material-icons right">send</i>
+                        </button>
+                    </div>
                 </div>
-                &nbsp;
-                <div class="input-field">
-                    <button disabled class="btn waves-effect waves-light" id="btn_send1">
-                        Send <i class="material-icons right">send</i>
-                    </button>
+                <div class="flex_x">
+                    <div class="input-field">
+                        <button disabled class="btn waves-effect waves-light" id="btn_send2">
+                            Send <i class="material-icons left">send</i>
+                        </button>
+                    </div>
+                    &nbsp;
+                    <div class="input-field flex_grow">
+                        <input id="send2" type="text" />
+                        <label for="send2">Inject as device (device → rethink)</label>
+                    </div>
                 </div>
-            </div>
-            <div class="flex_x">
-                <div class="input-field">
-                    <button disabled class="btn waves-effect waves-light" id="btn_send2">
-                        Send <i class="material-icons left">send</i>
-                    </button>
-                </div>
-                &nbsp;
-                <div class="input-field flex_grow">
-                    <input id="send2" type="text" />
-                    <label for="send2">Inject from device</label>
-                </div>
-            </div>
             </details>
         </div>
 

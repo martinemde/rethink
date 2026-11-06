@@ -148,7 +148,6 @@ Washer BE16@17 is supported by two saved within-run high-byte carries where
 upstream LE16@18 drops backwards. See `ENERGY.md`; this establishes counter
 layout evidence separately from Wh calibration.
 
-
 ## Clock display support (2026-10-31)
 
 Source: `../upstream-review-2026-10-31.md` and trialskid's
@@ -212,7 +211,6 @@ matched/refused/wrong-property E6 replies, actual-versus-requested values,
 fail-closed timeout. No deployment or physical command was performed by this
 implementation worker.
 
-
 ## Dryer clock display confirmation (2026-10-31)
 
 This supersedes the earlier command-only dryer scope above. The user reported the
@@ -257,7 +255,6 @@ omission alone is not a migration.
 Offline validation: **1158/1158 tests passed**, TypeScript check, native build
 and `git diff --check` passed. No dependency or lockfile changes. The build
 identifies existing base HEAD `c2591eb`; these edits are uncommitted.
-
 
 ## Integration observations, not laundry policy (2026-11-01)
 

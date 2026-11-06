@@ -16,7 +16,6 @@ in reviewed groups, preserving tests, upstream ancestry and investigation safety
 Production is unchanged. No ACK/query/startup/cloud behavior is authorized by
 creating this checkout. Use mocked transports for offline tests.
 
-
 ## Current laundry boundary (2026-11-01)
 
 User approved strict-valid live frame ACKs after processing for washer, dryer and
