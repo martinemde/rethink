@@ -127,6 +127,25 @@ describe('FAFXU22007 verified local behavior', () => {
         )
     })
 
+    test('low detergent bit is independent of the ezDispense drawer', () => {
+        const { ha, thinq } = makeDevice()
+        for (const [flags, low, drawer] of [
+            [0x08, 'OFF', 'ON'],
+            [0x0a, 'ON', 'ON'],
+            [0x0e, 'ON', 'OFF'],
+            [0x0c, 'OFF', 'OFF'],
+        ] as const) {
+            const frame = Buffer.from(EB_IDLE)
+            frame[15 + 39] = flags
+            thinq.onData(checksum(frame))
+            const p = ha.devices[DEVICE_ID].properties
+            assert.equal(p.low_detergent, low)
+            assert.equal(p.drawer, drawer)
+        }
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(thinq.sent.filter((message) => message.cmd !== 'ack'), [])
+    })
+
     test('total time is byte16; remote start, lock and drawer have isolated masks', () => {
         const changed = Buffer.from(EB_IDLE)
         changed[15 + 16] = 89
@@ -1227,6 +1246,7 @@ describe('FAFXU22007', () => {
             melody: 'Normal',
             splash_screen: 'Normal',
             clock_display: 'OFF',
+            low_detergent: 'OFF',
             drawer: 'OFF',
             remote_start: 'OFF',
         })

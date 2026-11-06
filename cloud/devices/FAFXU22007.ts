@@ -189,6 +189,8 @@ const DOOR_LOCK_MASK = 0x01
 
 const OPT5_OFFSET = 39
 const OPT5_DELAY_START = 0x80
+// Provisional low-detergent mapping from the user-observed warning on 2026-11-06.
+const OPT5_LOW_DETERGENT = 0x02
 const OPT5_DRAWER_CLOSED = 0x04
 
 const OPT6_OFFSET = 40
@@ -610,6 +612,13 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/door',
                         name: 'Door',
                         device_class: 'door',
+                    },
+                    low_detergent: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-low_detergent',
+                        state_topic: '$this/low_detergent',
+                        name: 'Low detergent',
+                        icon: 'mdi:cup-water',
                     },
                     drawer: {
                         platform: 'binary_sensor',
@@ -1433,6 +1442,7 @@ export default class Device extends AABBDevice {
         )
         this.publishProperty('door_lock', (rec[DOOR_LOCK_OFFSET] & DOOR_LOCK_MASK) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('remote_start', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_START) !== 0))
+        this.publishProperty('low_detergent', (rec[OPT5_OFFSET] & OPT5_LOW_DETERGENT) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('drawer', (rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) !== 0 ? 'OFF' : 'ON')
         this.publishProperty('quick_load_sense', onOff((rec[OPT7_OFFSET] & OPT7_QUICK_LOAD_SENSE) !== 0))
         this.publishProperty('clock_display', onOff((rec[CLOCK_DISPLAY_OFFSET] & CLOCK_DISPLAY_MASK) !== 0))
