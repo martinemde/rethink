@@ -163,28 +163,15 @@ const bytesOf = (frame) => frame.rawHex.match(/../g)?.map((h) => parseInt(h, 16)
 // Status comparison, as before: only live (not injected) device reports, never E6 snapshots, move the baseline.
 function compareStatus(decoded, direction, injected) {
     const status = decoded.valid ? decoded.status : null
-    if (!status) return { changedRecord: [], notes: [] }
+    if (!status) return { changedRecord: [] }
     const live = direction === 'rx' && !injected
     const previous = live ? previousStatus : undefined
-    const notes = []
-    if (status.source === 'E6')
-        notes.push(
-            'Reply snapshot, not a confirmed whole-device state. Excluded from the ordinary-status comparison baseline.',
-        )
     const changedRecord =
         previous && previous.length === status.record.length
             ? status.record.flatMap((value, offset) => (value !== previous[offset] ? [offset] : []))
             : []
-    notes.push(
-        previous
-            ? changedRecord.length
-                ? 'Changed record offsets: ' + changedRecord.join(', ')
-                : 'No record bytes changed.'
-            : 'No preceding status baseline in this connection.',
-    )
-    if (injected) notes.push('Injected report excluded from live status comparisons.')
     if (live && status.source !== 'E6') previousStatus = [...status.record]
-    return { changedRecord, previous, notes }
+    return { changedRecord, previous }
 }
 
 function shortNote(frame) {
@@ -258,7 +245,7 @@ function renderFrame(frame) {
 function pushMessage(direction, payload, injected, type) {
     const messages = get('messages')
     const decoded = decodePacket(payload, { model: deviceModel })
-    const { changedRecord, previous, notes } = compareStatus(decoded, direction, injected)
+    const { changedRecord, previous } = compareStatus(decoded, direction, injected)
     const chunks = frameChunks(decoded)
     for (const chunk of chunks)
         chunk.changed =
@@ -273,7 +260,6 @@ function pushMessage(direction, payload, injected, type) {
         chunks,
         changedRecord,
         previous,
-        notes,
         // decodePacket normalises the payload; fall back to the payload itself if it was not even hex.
         rawHex: decoded.rawHex || String(payload).replace(/\s/g, ''),
         model: deviceModel,
@@ -554,14 +540,9 @@ function renderInspector(frame) {
         ),
     )
     panel.appendChild(
-        element(
-            'div',
-            decoded.valid ? 'note' : 'note warning',
-            decoded.valid ? 'Length and checksum valid' : decoded.errors.join('; '),
-        ),
+        element('div', decoded.valid ? 'note' : 'note warning', decoded.valid ? '✓' : decoded.errors.join('; ')),
     )
     if (frame.injected) panel.appendChild(element('div', 'note warning', 'Injected by the monitor, not real traffic'))
-    for (const note of frame.notes) panel.appendChild(element('div', 'note', note))
 
     const actions = element('div', 'actions')
     actions.appendChild(copyButton('small-button', 'Copy hex', frame.rawHex))

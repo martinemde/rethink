@@ -203,10 +203,10 @@ export function annotatedText(frame) {
     return lines.join('\n')
 }
 
-/** Toggle a checkbox, or apply its new state to the visible range from the last click. */
+/** A click replaces the selection; Shift applies the clicked state across the visible range. */
 export function pressFrame(selection, number, shiftKey = false, numbers = [number]) {
-    const selected = new Set(selection?.selected ?? [])
-    const checked = !selected.has(number)
+    const selected = new Set(shiftKey ? (selection?.selected ?? []) : [])
+    const checked = !selection?.selected.has(number)
     const anchor = shiftKey && selection ? selection.anchor : number
     const low = Math.min(anchor, number)
     const high = Math.max(anchor, number)

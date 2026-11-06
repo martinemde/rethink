@@ -141,21 +141,23 @@ test('transcript and annotated text keep the raw frame copyable', () => {
     assert.ok(lines.some((line: string) => /Power result|Power/.test(line)))
 })
 
-test('checkboxes toggle independently and Shift applies the clicked state across a range', () => {
+test('normal clicks replace selection and Shift selects or clears a range', () => {
     const numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9]
     let selection = pressFrame(null, 2)
     selection = pressFrame(selection, 5)
-    assert.deepEqual([...selection.selected], [2, 5])
+    assert.deepEqual([...selection.selected], [5])
     selection = pressFrame(selection, 8, true, numbers)
-    assert.deepEqual([...selection.selected].sort(), [2, 5, 6, 7, 8])
+    assert.deepEqual([...selection.selected].sort(), [5, 6, 7, 8])
     selection = pressFrame(selection, 5, true, numbers)
-    assert.deepEqual([...selection.selected], [2])
+    assert.deepEqual([...selection.selected], [])
+    selection = pressFrame(selection, 2)
     selection = pressFrame(selection, 2)
     assert.equal(selectionBounds(selection), null)
     assert.equal(selectionBounds(null), null)
-    // An unchecked anchor remains available for Shift-click, just like a checked one.
     selection = pressFrame(selection, 4, true, numbers)
     assert.deepEqual([...selection.selected], [2, 3, 4])
+    selection = pressFrame(selection, 9)
+    assert.deepEqual([...selection.selected], [9])
 })
 
 test('Shift ranges work upwards, skip hidden frames and start with one frame without an anchor', () => {
