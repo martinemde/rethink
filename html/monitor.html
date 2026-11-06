@@ -231,6 +231,10 @@
             }
 
             /* Stream + inspector */
+            .monitor-main > * {
+                box-sizing: border-box;
+                width: calc((100% - 12px) / 2);
+            }
             .monitor-main {
                 display: flex;
                 gap: 12px;
@@ -239,7 +243,7 @@
             }
             .stream-wrap {
                 position: relative;
-                flex: 999 1 520px;
+                flex: 0 0 auto;
                 min-width: 0;
                 display: flex;
                 flex-direction: column;
@@ -308,7 +312,7 @@
                 justify-content: flex-end;
             }
             .bubble {
-                max-width: 86%;
+                max-width: 70%;
                 min-width: 0;
                 border-radius: 8px;
                 padding: 3px 10px 4px;
@@ -503,7 +507,7 @@
 
             /* Inspector */
             .inspector {
-                flex: 1 1 420px;
+                flex: 0 0 auto;
                 min-width: 0;
                 overflow: auto;
                 border: 1px solid var(--line);
@@ -704,6 +708,9 @@
             }
 
             @media (max-width: 900px) {
+                .monitor-main > * {
+                    width: 100%;
+                }
                 .monitor-main {
                     flex-direction: column;
                 }
