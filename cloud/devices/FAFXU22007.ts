@@ -5,6 +5,7 @@ import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import AABBDevice from './aabb_device'
 import { Enum } from '@/util/enum'
+import { ENDING_MELODY } from './ending_melody'
 
 // LG WM6700HBA front-load washer: long AABB frames carrying a 51-byte record.
 //
@@ -54,13 +55,13 @@ const DOOR_EVENT_VALUE_OFFSET = 18
 const DOOR_OPEN = 1
 const DOOR_SHUT = 2
 
+// The d8 frame is not the ezDispense drawer, and is ignored:
+//
 //     aa 07 20 d8 17 <chk> bb
-//              │  │
-//              │  └ 0 open, else the wash count (rec[28])
-//              └ ezDispense drawer
-const DRAWER_FRAME_TYPE = 0xd8
-const DRAWER_BUF_LEN = 3
-const DRAWER_OPEN = 0
+//                 └ 0, or the wash count since the last Tub Clean (rec[28])
+//
+// It comes in the power-on and reconnect bursts and when the count steps. A 0 can come when the drawer opens,
+// but most openings and closings send none.
 
 const STATUS_REQUEST = 'F0ED112101000000180411120000'
 
@@ -77,6 +78,7 @@ const PROP_COURSE = 0x0a // 0xff, then PROP_DOWNLOADED_COURSE, for a downloaded 
 const PROP_DOWNLOADED_COURSE = 0x0b
 const PROP_BUZZER = 0x13
 const PROP_CYCLE_OPTIMIZATION = 0x4c
+const PROP_MELODY = 0x50
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_QUICK_LOAD_SENSE = 0x56
 const PROP_CURRENT_TIME_DISPLAY = 0x58 // modelJSON currentTimeDisplay
@@ -161,8 +163,9 @@ const DETERGENT_LEVEL_OFFSET = 30
 const SOFTENER_LEVEL_OFFSET = 31
 const DETERGENT_AMOUNT_OFFSET = 32 // mL
 const SOFTENER_AMOUNT_OFFSET = 33 // mL
-const DOOR_LOCK_OFFSET = 38
 const DOOR_LOCK_MASK = 0x01
+const DOOR_LOCK_OFFSET = 38
+const MELODY_OFFSET = 45
 const SPLASH_SCREEN_OFFSET = 46
 const SOFTENER_TANK_USE_OFFSET = 48
 
@@ -665,6 +668,16 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:clock-outline',
                         entity_category: 'config',
                     },
+                    melody: {
+                        platform: 'select',
+                        unique_id: '$deviceid-melody',
+                        state_topic: '$this/melody',
+                        command_topic: '$this/melody/set',
+                        options: ENDING_MELODY.options,
+                        name: 'Ending melody',
+                        icon: 'mdi:music-note',
+                        entity_category: 'config',
+                    },
                     splash_screen: {
                         platform: 'select',
                         unique_id: '$deviceid-splash_screen',
@@ -839,6 +852,9 @@ export default class Device extends AABBDevice {
             this.writeProps(p, value === 'ON' ? 1 : 0)
         } else if (prop === 'remote_maintain') {
             if (value === 'ON' || value === 'OFF') this.writeCommand(COMMAND_REMOTE_MAINTAIN, value === 'ON' ? 1 : 0)
+        } else if (prop === 'melody') {
+            const idx = ENDING_MELODY.unmap(value)
+            if (idx !== undefined) this.writeProps(PROP_MELODY, idx)
         } else if (prop === 'splash_screen') {
             const idx = SPLASH_SCREEN.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_SPLASH_SCREEN, idx)
@@ -852,7 +868,6 @@ export default class Device extends AABBDevice {
 
     processAABB(buf: Buffer) {
         if (buf.length < 2 || buf[0] !== CLASS_BYTE) return
-        if (buf[1] === DRAWER_FRAME_TYPE) return this.processDrawer(buf)
         if (buf[1] === COMMAND_REPLY_TYPE) return this.processCommandReply(buf)
         if (buf[1] === WRITE_REPLY_TYPE) {
             const own = this.writeAnswered(SET_PROPERTY[1])?.own
@@ -888,11 +903,6 @@ export default class Device extends AABBDevice {
         const door = buf[DOOR_EVENT_VALUE_OFFSET]
         if (door !== DOOR_OPEN && door !== DOOR_SHUT) return
         this.publishProperty('door', door === DOOR_OPEN ? 'ON' : 'OFF')
-    }
-
-    private processDrawer(buf: Buffer) {
-        if (buf.length !== DRAWER_BUF_LEN) return
-        this.publishProperty('drawer', buf[2] === DRAWER_OPEN ? 'ON' : 'OFF')
     }
 
     private processStatus(buf: Buffer, recordOffset: number, expectedLen: number) {
@@ -950,6 +960,7 @@ export default class Device extends AABBDevice {
         this.publishProperty('remote_start', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_START) !== 0))
         this.publishProperty('drawer', onOff((rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) === 0))
         this.publishProperty('quick_load_sense', onOff((rec[OPT7_OFFSET] & OPT7_QUICK_LOAD_SENSE) !== 0))
+        this.publishProperty('melody', ENDING_MELODY.map(rec[MELODY_OFFSET]))
         this.publishProperty('splash_screen', SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]))
         this.publishProperty(
             'current_time_display',
