@@ -51,8 +51,7 @@ const COMPLETION_INNER_LEN = 121
 const DOOR_EVENT_INNER_LEN = 6
 const DOOR_EVENT_BUF_LEN = 13 + DOOR_EVENT_INNER_LEN + 1
 
-const DOOR_EVENT_ID = 0x10
-const DOOR_EVENT_ID_OFFSETS = [13, 17]
+const DOOR_EVENT_PREFIX = Buffer.from([0x10, 0x0b, 0x01, 0x0b, 0x10])
 const DOOR_EVENT_VALUE_OFFSET = 18
 
 const DOOR_OPEN = 1
@@ -902,9 +901,10 @@ export default class Device extends AABBDevice {
         switch (buf[INNER_TYPE_OFFSET]) {
             case STATUS_FRAME_TYPE:
                 if (innerLen !== STATUS_INNER_LEN) return
+                if (buf[13] !== 0 || buf[13 + RECORD_LEN] !== 0) return
                 return this.processStatus(buf, STATUS_RECORD_OFFSET, STATUS_BUF_LEN)
             case SINGLE_STATUS_FRAME_TYPE:
-                if (innerLen !== SINGLE_INNER_LEN) return
+                if (innerLen !== SINGLE_INNER_LEN || buf[13] !== 0) return
                 return this.processStatus(buf, SINGLE_RECORD_OFFSET, SINGLE_BUF_LEN)
             case EVENT_FRAME_TYPE:
                 if (
@@ -928,7 +928,7 @@ export default class Device extends AABBDevice {
     // The panel menu event (id 0x11) has the same length.
     private processDoorEvent(buf: Buffer) {
         if (buf.length !== DOOR_EVENT_BUF_LEN) return
-        if (DOOR_EVENT_ID_OFFSETS.some((o) => buf[o] !== DOOR_EVENT_ID)) return
+        if (!buf.subarray(13, 18).equals(DOOR_EVENT_PREFIX)) return
         const door = buf[DOOR_EVENT_VALUE_OFFSET]
         if (door !== DOOR_OPEN && door !== DOOR_SHUT) return
         this.publishProperty('door', door === DOOR_OPEN ? 'ON' : 'OFF')

@@ -1283,8 +1283,7 @@ describe('FAFXU22007', () => {
         // Synthetic, from EB_IDLE (whose rec[47] is 0): clock on, with Both Tanks set beside it.
         const frame = Buffer.from(EB_IDLE)
         frame[2 + 13 + 47] = 0x80 | 0x60 // AA <len>, envelope header
-        const sum = frame.subarray(0, frame.length - 2).reduce((pv, cv) => pv + cv, 0)
-        frame[frame.length - 2] = (sum & 0xff) ^ 0x55
+        frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
         const p = feed([frame])
         assert.equal(p.current_time_display, 'ON')
         assert.equal(p.nozzle_clean_tank, 'Both Tanks')
@@ -1297,8 +1296,7 @@ describe('FAFXU22007', () => {
         const frame = Buffer.from(END)
         const rec = 2 + 13 + 51 // AA FF, envelope header, previous record
         frame.set([0x01, 0x2c, 0x02, 0x58, 0x01, 0x00, 0x14], rec + 13)
-        const sum = frame.subarray(0, frame.length - 2).reduce((pv, cv) => pv + cv, 0)
-        frame[frame.length - 2] = (sum & 0xff) ^ 0x55
+        frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
         const p = feed([frame])
         assert.equal(p.remaining_time, 300)
         assert.equal(p.initial_time, 600)
@@ -1669,6 +1667,7 @@ const EC_ON = buf(
 // Synthetic: EC_ON with its current course (0x2e) set to 0.
 const EC_ON_NO_COURSE = Buffer.from(EC_ON)
 EC_ON_NO_COURSE[71] = 0
+EC_ON_NO_COURSE.writeUInt16BE(crc16(EC_ON_NO_COURSE.subarray(0, -3)), EC_ON_NO_COURSE.length - 3)
 
 // A cycle ending after the washer was sent f0 24 10 01 01 (Remote Maintain on): state 42, rec[40] 0x3c.
 const END_REMOTE_MAINTAIN = buf(
@@ -1914,5 +1913,45 @@ describe('FAFXU22007 completion notifications', () => {
         assert.equal(events().length, 0)
         thinq.emit('data', completionNotification())
         assert.equal(events().length, 1)
+    })
+})
+
+describe('FAFXU22007 parsing boundaries', () => {
+    const mutateLong = (original: Buffer, change: (frame: Buffer) => void) => {
+        const frame = Buffer.from(original)
+        change(frame)
+        frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
+        return frame
+    }
+
+    test('unrelated event signatures and invalid values do not change the door', () => {
+        for (const offset of [16, 17, 18, 20]) {
+            const frame = mutateLong(DOOR_OPEN, (f) => {
+                f[offset] = 0xff
+            })
+            const { ha, thinq } = makeDevice()
+            thinq.emit('data', DOOR_SHUT)
+            thinq.resetRecorder()
+            thinq.emit('data', frame)
+            assert.equal(ha.devices[DEVICE_ID].properties.door, 'OFF')
+            // Still a valid envelope: preserve the cloud's ACK policy.
+            assert.equal(thinq.sent.filter((m) => m.cmd === 'ack').length, 1)
+        }
+    })
+
+    test('rejects either washer record marker, with otherwise valid framing and CRC', () => {
+        for (const [original, offset] of [
+            [EB_IDLE, 15],
+            [CHIME_LOW, 15],
+            [CHIME_LOW, 66],
+        ] as const) {
+            const frame = mutateLong(original, (f) => {
+                f[offset] = 1
+            })
+            const { ha, thinq } = makeDevice()
+            thinq.emit('data', frame)
+            assert.deepEqual(ha.devices[DEVICE_ID].properties, {})
+            assert.equal(thinq.sent.filter((m) => m.cmd === 'ack').length, 1)
+        }
     })
 })

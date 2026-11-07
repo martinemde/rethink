@@ -1458,3 +1458,27 @@ describe('BDVG_FX0003_US completion notifications', () => {
         assert.equal(events().length, 1)
     })
 })
+
+describe('BDVG_FX0003_US parsing boundaries', () => {
+    const mutateLong = (original: Buffer, change: (frame: Buffer) => void) => {
+        const frame = Buffer.from(original)
+        change(frame)
+        frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
+        return frame
+    }
+
+    test('unrelated event signatures and invalid values do not change the door', () => {
+        for (const offset of [16, 17, 18, 31]) {
+            const frame = mutateLong(DOOR_OPEN, (f) => {
+                f[offset] = 0xff
+            })
+            const { ha, thinq } = makeDevice()
+            thinq.emit('data', DOOR_SHUT)
+            thinq.resetRecorder()
+            thinq.emit('data', frame)
+            assert.equal(ha.devices[DEVICE_ID].properties.door, 'OFF')
+            // Still a valid envelope: preserve the cloud's ACK policy.
+            assert.equal(thinq.sent.filter((m) => m.cmd === 'ack').length, 1)
+        }
+    })
+})

@@ -113,7 +113,6 @@ const COMPLETION_INNER_LEN = 28
 const EVENT_INNER_LEN = 18
 const EVENT_PAYLOAD_OFFSET = 13
 
-const EVENT_ID_OFFSET = 0
 const EVENT_POWER_OFFSET = 9
 const EVENT_DOOR_OFFSET = 16
 
@@ -790,7 +789,10 @@ export default class Device extends AABBDevice {
         if (!on) this.completionState = 'unarmed'
         if (!on && this.course) this.course = { ...this.course, on: false }
         this.publishProperty('power', onOff(on))
-        if (payload[EVENT_ID_OFFSET] === EVENT_ID_DOOR)
+        if (
+            payload.subarray(0, 5).equals(Buffer.from([EVENT_ID_DOOR, 0x0a, 0x02, 0x04, EVENT_ID_DOOR])) &&
+            [0, DOOR_OPEN].includes(payload[EVENT_DOOR_OFFSET])
+        )
             this.publishProperty('door', onOff(payload[EVENT_DOOR_OFFSET] === DOOR_OPEN))
     }
 
