@@ -81,6 +81,9 @@ const PROP_MELODY = 0x50
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_QUICK_LOAD_SENSE = 0x56
 const PROP_CLOCK_DISPLAY = 0x58
+const PROP_TIME_FORMAT = 0x59
+const PROP_DATE_DISPLAY = 0x5a
+const TIME_FORMAT = Enum.of({ '12-hour': 0, '24-hour': 1 })
 
 const COURSE_DOWNLOADED = 0xff
 const CYCLE = Enum.of({ start: 1, pause: 2, resume: 3 })
@@ -165,6 +168,9 @@ const NOZZLE_CLEAN_OFFSET = 47
 const NOZZLE_CLEAN_MASK = 0x60
 const CLOCK_DISPLAY_OFFSET = 47
 const CLOCK_DISPLAY_MASK = 0x80
+const CLOCK_SETTINGS_OFFSET = 49
+const TIME_FORMAT_MASK = 0x02
+const DATE_DISPLAY_MASK = 0x04
 
 const OPT1_OFFSET = 34
 const OPT1_COLD_WASH = 0x04
@@ -372,6 +378,8 @@ const RECORD_PROPERTIES = [
     { prop: PROP_MELODY, key: 'melody', offset: MELODY_OFFSET },
     { prop: 0x51, key: 'splash_screen', offset: 46 },
     { prop: PROP_CLOCK_DISPLAY, key: 'clock_display', offset: CLOCK_DISPLAY_OFFSET, mask: CLOCK_DISPLAY_MASK },
+    { prop: PROP_TIME_FORMAT, key: 'time_format', offset: CLOCK_SETTINGS_OFFSET, mask: TIME_FORMAT_MASK },
+    { prop: PROP_DATE_DISPLAY, key: 'date_display', offset: CLOCK_SETTINGS_OFFSET, mask: DATE_DISPLAY_MASK },
 ] as const
 
 function recordValue(rec: Buffer, field: (typeof RECORD_PROPERTIES)[number]): number {
@@ -830,6 +838,30 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:clock-outline',
                         entity_category: 'config',
                     },
+                    time_format: {
+                        platform: 'select',
+                        unique_id: '$deviceid-time_format',
+                        state_topic: '$this/time_format',
+                        command_topic: '$this/time_format/set',
+                        options: TIME_FORMAT.options,
+                        retain: false,
+                        optimistic: false,
+                        name: 'Time format',
+                        icon: 'mdi:clock-outline',
+                        entity_category: 'config',
+                    },
+                    date_display: {
+                        platform: 'switch',
+                        device_class: 'switch',
+                        unique_id: '$deviceid-date_display',
+                        state_topic: '$this/date_display',
+                        command_topic: '$this/date_display/set',
+                        retain: false,
+                        optimistic: false,
+                        name: 'Date display',
+                        icon: 'mdi:calendar',
+                        entity_category: 'config',
+                    },
                     melody: {
                         platform: 'select',
                         unique_id: '$deviceid-melody',
@@ -947,7 +979,15 @@ export default class Device extends AABBDevice {
         this.publishProperty('problem_reason', this.problem ?? 'OK')
     }
 
+    private clockSettingAllowed(prop: number) {
+        if (![PROP_TIME_FORMAT, PROP_DATE_DISPLAY].includes(prop)) return true
+        if (!!this.lastRecord && (this.lastRecord[CLOCK_DISPLAY_OFFSET] & CLOCK_DISPLAY_MASK) !== 0) return true
+        this.setProblem('Command needs Clock display enabled in reported status')
+        return false
+    }
+
     private writeProps(...pairs: number[]) {
+        if (!this.clockSettingAllowed(pairs[0])) return
         const inner = Buffer.from([...SET_PROPERTY, pairs.length / 2, ...pairs])
         const courseStart =
             pairs[0] === PROP_COURSE &&
@@ -986,6 +1026,7 @@ export default class Device extends AABBDevice {
                 this.pendingOwners.delete('power')
             }
             if (pairs[0] !== PROP_POWER && !this.context(false)) return
+            if (!this.clockSettingAllowed(pairs[0])) return
             if (pairs[0] === PROP_POWER && this.writesBlocked) return
             if (courseStart) {
                 if (!this.course || this.course.code === COURSE_DOWNLOADED) {
@@ -1159,6 +1200,11 @@ export default class Device extends AABBDevice {
             this.writeProps(p, value === 'ON' ? 1 : 0)
         } else if (prop === 'remote_maintain') {
             if (value === 'ON' || value === 'OFF') this.writeCommand(COMMAND_REMOTE_MAINTAIN, value === 'ON' ? 1 : 0)
+        } else if (prop === 'time_format') {
+            const idx = TIME_FORMAT.unmap(value)
+            if (idx !== undefined) this.writeProps(PROP_TIME_FORMAT, idx)
+        } else if (prop === 'date_display') {
+            if (value === 'ON' || value === 'OFF') this.writeProps(PROP_DATE_DISPLAY, value === 'ON' ? 1 : 0)
         } else if (prop === 'melody') {
             const idx = ENDING_MELODY.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_MELODY, idx)
@@ -1304,6 +1350,7 @@ export default class Device extends AABBDevice {
                 rinse: RINSE,
                 buzzer: BUZZER,
                 melody: ENDING_MELODY,
+                time_format: TIME_FORMAT,
                 splash_screen: SPLASH_SCREEN,
             }
             const setting = settings[field.key]
@@ -1447,6 +1494,8 @@ export default class Device extends AABBDevice {
         this.publishProperty('drawer', (rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) !== 0 ? 'OFF' : 'ON')
         this.publishProperty('quick_load_sense', onOff((rec[OPT7_OFFSET] & OPT7_QUICK_LOAD_SENSE) !== 0))
         this.publishProperty('clock_display', onOff((rec[CLOCK_DISPLAY_OFFSET] & CLOCK_DISPLAY_MASK) !== 0))
+        this.publishProperty('time_format', TIME_FORMAT.map(bit(rec[CLOCK_SETTINGS_OFFSET], TIME_FORMAT_MASK)))
+        this.publishProperty('date_display', onOff((rec[CLOCK_SETTINGS_OFFSET] & DATE_DISPLAY_MASK) !== 0))
         this.publishProperty('melody', ENDING_MELODY.map(rec[MELODY_OFFSET]))
         this.publishProperty('splash_screen', SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]))
         this.publishingRecord = false

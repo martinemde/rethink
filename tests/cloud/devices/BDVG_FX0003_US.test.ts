@@ -690,6 +690,8 @@ describe('BDVG_FX0003_US', () => {
             energy_saver: 'OFF',
             keep_fresh: 'OFF',
             clock_display: 'OFF',
+            time_format: '12-hour',
+            date_display: 'OFF',
             melody: 'Normal',
             splash_screen: 'Snowman 1', // what the app showed until it was changed on 09-25
         })
@@ -2395,4 +2397,339 @@ test('malformed E6 fixed header cannot settle an otherwise valid property reply'
     assert.equal(thinq.outbox.length, 1)
     thinq.onData(writeReply(thinq.outbox[0]))
     assert.equal(thinq.outbox.length, 2)
+})
+
+describe('BDVG_FX0003_US confirmed clock settings', () => {
+    // Synthetic variations of existing sanitized records, not new physical captures.
+    const record = (shown = true, format = 0, date = 0) => {
+        const rec = Buffer.from(EB_CONNECT.subarray(15, -3))
+        rec[28] = (rec[28] & ~32) | (shown ? 32 : 0)
+        rec[28] = (rec[28] & ~192) | (format ? 64 : 0) | (date ? 128 : 0)
+        return rec
+    }
+    const status = (rec: Buffer, previous?: Buffer) => {
+        const payload = previous ? Buffer.concat([previous, rec]) : rec
+        const frame = Buffer.alloc(payload.length + 18)
+        frame.set([0xaa, 0xff, 48, 0x0a])
+        frame.writeUInt16BE(frame.length, 4)
+        frame[12] = previous ? 0xec : 0xeb
+        frame.writeUInt16BE(payload.length, 13)
+        frame.set(payload, 15)
+        frame[frame.length - 1] = 0xbb
+        frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
+        return frame
+    }
+    test('Configuration discovery and EB/current EC readback retain settings while clock hidden', () => {
+        const { ha, thinq, dev } = makeDevice()
+        dev.publishConfig()
+        const c = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        assert.deepEqual(c.time_format.options, ['12-hour', '24-hour'])
+        for (const key of ['time_format', 'date_display']) {
+            assert.equal(c[key].entity_category, 'config')
+            assert.equal(c[key].optimistic, false)
+            assert.equal(c[key].retain, false)
+            assert.equal(c[key].command_topic, `$this/${key}/set`)
+        }
+        for (const shown of [false, true])
+            for (const format of [0, 1])
+                for (const date of [0, 1]) {
+                    const rec = record(shown, format, date)
+                    rec[28] |= 19
+                    for (const frame of [status(rec), status(rec, record(!shown, 1 - format, 1 - date))]) {
+                        thinq.onData(frame)
+                        const p = ha.devices[DEVICE_ID].properties
+                        assert.equal(p.clock_display, shown ? 'ON' : 'OFF')
+                        assert.equal(p.time_format, format ? '24-hour' : '12-hour')
+                        assert.equal(p.date_display, date ? 'ON' : 'OFF')
+                        assert.equal(p.keep_fresh, 'ON')
+                    }
+                }
+        assert.deepEqual(thinq.outbox, [])
+        dev.drop()
+    })
+    test('exact singleton encoding; accepted actual E6 feedback only, never requested echoes', () => {
+        for (const [key, value, prop, raw] of [
+            ['time_format', '24-hour', 0x59, 1],
+            ['time_format', '12-hour', 0x59, 0],
+            ['date_display', 'ON', 0x5a, 1],
+            ['date_display', 'OFF', 0x5a, 0],
+        ] as const)
+            for (const result of [0, 3]) {
+                const { ha, thinq, dev } = makeDevice()
+                const before = record(true, prop === 0x59 ? 1 - raw : 0, prop === 0x5a ? 1 - raw : 0)
+                thinq.onData(status(before))
+                const oldValue = ha.devices[DEVICE_ID].properties[key]
+                dev.setProperty(key, value)
+                const expected = Buffer.from([0xaa, 13, 0xf0, 0xe5, 0, 2, 1, 0xff, 1, prop, raw, 0, 0xbb])
+                expected[11] = (expected.subarray(0, 11).reduce((a, b) => a + b, 0) & 255) ^ 0x55
+                assert.deepEqual(thinq.outbox, [expected])
+                assert.equal(ha.devices[DEVICE_ID].properties[key], oldValue)
+                const after = record(true, prop === 0x59 ? raw : 0, prop === 0x5a ? raw : 0)
+                thinq.onData(writeReply(thinq.outbox[0], after, new Map([[prop, result]])))
+                assert.equal(ha.devices[DEVICE_ID].properties[key], result === 0 ? value : oldValue)
+                dev.drop()
+            }
+    })
+    test('successful E6 with unchanged actual setting never echoes the requested format/date', () => {
+        for (const [key, value, prop] of [
+            ['time_format', '24-hour', 0x59],
+            ['date_display', 'ON', 0x5a],
+        ] as const) {
+            const { ha, thinq, dev } = makeDevice()
+            const unchanged = record()
+            thinq.onData(status(unchanged))
+            const before = ha.devices[DEVICE_ID].properties[key]
+            dev.setProperty(key, value)
+            thinq.onData(writeReply(thinq.outbox[0], unchanged))
+            assert.equal(ha.devices[DEVICE_ID].properties[key], before)
+            dev.drop()
+        }
+    })
+    test('missing, hidden and powered-off contexts and invalid payloads cannot send or enable clock', () => {
+        const { thinq, dev } = makeDevice()
+        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('date_display', 'ON')
+        thinq.onData(status(record(false, 1, 1)))
+        dev.setProperty('time_format', '12-hour')
+        dev.setProperty('date_display', 'OFF')
+        thinq.onData(status(record()))
+        for (const value of ['', '1', '0', '24', '12 hour', 'ON', '24-hour ']) dev.setProperty('time_format', value)
+        for (const value of ['', '1', '0', 'on', 'OFF ']) dev.setProperty('date_display', value)
+        const off = record()
+        off[13] = 0
+        thinq.onData(status(off))
+        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('date_display', 'ON')
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(
+            thinq.sent.filter((m) => m.cmd !== 'ack'),
+            [],
+        )
+        dev.drop()
+    })
+    test('accepted format overlay preserves sibling date/visibility, then expires without synthetic reset', (ctx) => {
+        const now = Date.now()
+        const clock = ctx.mock.method(Date, 'now', () => now)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.onData(status(record()))
+        dev.setProperty('time_format', '24-hour')
+        const after = record(true, 1, 0)
+        thinq.onData(writeReply(thinq.outbox[0], after))
+        assert.equal(ha.devices[DEVICE_ID].properties.time_format, '24-hour')
+        clock.mock.mockImplementation(() => now + 29_999)
+        thinq.onData(status(record(false, 0, 1)))
+        assert.equal(ha.devices[DEVICE_ID].properties.time_format, '24-hour')
+        assert.equal(ha.devices[DEVICE_ID].properties.date_display, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+        clock.mock.mockImplementation(() => now + 30_001)
+        thinq.onData(status(record(false, 0, 1)))
+        assert.equal(ha.devices[DEVICE_ID].properties.time_format, '12-hour')
+        assert.equal(ha.devices[DEVICE_ID].properties.date_display, 'ON')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
+        dev.drop()
+    })
+    test('accepted visibility alone cannot unlock format/date before a status report confirms it', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.onData(status(record(false)))
+        dev.setProperty('clock_display', 'ON')
+        const after = record(true)
+        thinq.onData(writeReply(thinq.outbox[0], after))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
+        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('date_display', 'ON')
+        assert.equal(thinq.outbox.length, 1)
+        thinq.onData(status(after))
+        dev.setProperty('time_format', '24-hour')
+        assert.equal(thinq.outbox.length, 2)
+        dev.drop()
+    })
+    test('queued settings recheck raw reported clock at dispatch', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.onData(status(record()))
+        dev.setProperty('buzzer', 'High')
+        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('date_display', 'ON')
+        const rec = record(false, 1, 1)
+        thinq.onData(status(rec))
+        thinq.onData(writeReply(thinq.outbox[0], rec))
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /Clock display/)
+        dev.drop()
+    })
+})
+
+describe('BDVG_FX0003_US command-only Smart Pairing', () => {
+    // Synthetic strict frames using the confirmed pairing header and established record layout.
+    const status = (state: number) => {
+        const rec = Buffer.from(EB_CONNECT.subarray(15, -3))
+        rec[13] = state
+        return longFrame(0xeb, rec)
+    }
+    const reply = (write: Buffer, results = new Map<number, number>(), state = 0) => {
+        const inner = Buffer.from(writeReply(write, status(state).subarray(15, -3), results).subarray(2, -2))
+        inner[3] = 1
+        return AABBDevice.frame(inner)
+    }
+
+    test('idle including silent Off accepts exact labels and encoding without a discovery entity or state', (t) => {
+        t.mock.timers.enable({ apis: ['Date'] })
+        for (const state of [0, 1, 4, 22]) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.onData(status(state))
+            t.mock.timers.tick(3_600_000)
+            dev.start()
+            for (const [label, code] of [
+                ['Normal', 7],
+                ['Bedding', 4],
+                ['Towels', 2],
+                ['AI Dry', 44],
+            ] as const) {
+                const before = { ...ha.devices[DEVICE_ID].properties }
+                dev.setProperty('smart_pairing', label)
+                const write = thinq.outbox[thinq.outbox.length - 1]
+                assert.deepEqual(
+                    write,
+                    AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0, 1, 1, 0xff, 2, 0x3d, 1, 0x0a, code])),
+                )
+                thinq.onData(
+                    reply(
+                        write,
+                        new Map([
+                            [0x3d, 0],
+                            [0x0a, 0],
+                        ]),
+                    ),
+                )
+                for (const key of ['course', 'temp', 'dry_level', 'dry_time', 'power', 'status'])
+                    assert.equal(ha.devices[DEVICE_ID].properties[key], before[key])
+                assert.equal(ha.devices[DEVICE_ID].properties.problem, 'OFF')
+            }
+            assert.equal(thinq.outbox.length, 4)
+            assert.equal(ha.devices[DEVICE_ID].config!.components.smart_pairing, undefined)
+            assert.equal(ha.devices[DEVICE_ID].properties.smart_pairing, undefined)
+            dev.drop()
+        }
+    })
+
+    test('absent, active, paused, unknown and dropped contexts reject; downloaded and invalid labels never send', () => {
+        const { thinq, dev } = makeDevice()
+        dev.setProperty('smart_pairing', 'Normal')
+        for (const state of [2, 3, 5, 7, 8, 9, 10, 14, 23, 24, 255]) {
+            thinq.onData(status(state))
+            dev.setProperty('smart_pairing', 'Normal')
+        }
+        thinq.onData(status(0))
+        for (const value of ['', '7', 'normal', 'Normal ', 'Rack Dry', 'Wrinkle Prevention', 'ON'])
+            dev.setProperty('smart_pairing', value)
+        dev.drop()
+        dev.setProperty('smart_pairing', 'Normal')
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(
+            thinq.sent.filter((m) => m.cmd !== 'ack'),
+            [],
+        )
+    })
+
+    test('wrong family/properties, receipt and malformed replies cannot settle pairing; refusal is diagnostic only', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.onData(status(0))
+        dev.setProperty('smart_pairing', 'Towels')
+        dev.setProperty('smart_pairing', 'Normal')
+        const write = thinq.outbox[0]
+        thinq.onData(writeReply(write)) // same property set, ordinary course-setting header
+        thinq.onData(AABBDevice.frame(Buffer.from([0x30, 0, 0xe5, 0]))) // transport receipt only
+        const wrong = Buffer.from(reply(write).subarray(2, -2))
+        wrong[7] = 0x3e
+        thinq.onData(AABBDevice.frame(wrong))
+        const corrupt = reply(write)
+        corrupt[corrupt.length - 2] ^= 1
+        thinq.onData(corrupt)
+        assert.equal(thinq.outbox.length, 1)
+        thinq.onData(reply(write, new Map([[0x3d, 3]])))
+        assert.equal(thinq.outbox.length, 2)
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /refused/)
+        assert.equal(ha.devices[DEVICE_ID].properties.course, 'Timed Dry')
+        thinq.onData(reply(thinq.outbox[1]))
+        assert.equal(ha.devices[DEVICE_ID].properties.problem, 'OFF')
+        dev.drop()
+    })
+
+    test('dispatch rechecks reported state behind bridge; pairing record cannot erase bundle or select a course', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.onData(status(1))
+        const chime = AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0, 2, 1, 0xff, 1, 0x13, 1]))
+        sendCloud(thinq, chime)
+        dev.setProperty('smart_pairing', 'Towels')
+        thinq.onData(status(7))
+        thinq.onData(writeReply(chime))
+        assert.equal(thinq.outbox.length, 1)
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /idle/)
+        thinq.onData(status(1))
+        dev.setProperty('smart_pairing', 'Towels')
+        dev.setProperty('temp', 'Low')
+        thinq.onData(reply(thinq.outbox[1])) // Off appended record must not clear the selected course/bundle
+        assert.equal(thinq.outbox.length, 3)
+        assert.equal(thinq.outbox[2][9], 0x20)
+        assert.equal(thinq.outbox[2][10], 1)
+        assert.equal(ha.devices[DEVICE_ID].properties.course, 'Timed Dry')
+        dev.drop()
+    })
+
+    test('bridge pairing and own course writes share FIFO but cannot answer each other', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.onData(status(1))
+        const pairing = AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0, 1, 1, 0xff, 2, 0x3d, 1, 0x0a, 2]))
+        sendCloud(thinq, pairing)
+        dev.setProperty('course', 'Normal')
+        thinq.onData(writeReply(pairing))
+        assert.equal(thinq.outbox.length, 1)
+        thinq.onData(reply(pairing))
+        assert.equal(thinq.outbox.length, 2)
+        thinq.onData(reply(thinq.outbox[1])) // same course prop, wrong family
+        dev.setProperty('buzzer', 'Low')
+        assert.equal(thinq.outbox.length, 2)
+        const rec = Buffer.from(status(1).subarray(15, -3))
+        rec[5] = 7
+        thinq.onData(writeReply(thinq.outbox[1], rec))
+        assert.equal(thinq.outbox.length, 3)
+        dev.drop()
+    })
+
+    test('event-only power transitions invalidate idle context until a fresh status', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.onData(status(0))
+        const payload = Buffer.alloc(18)
+        payload[9] = 1
+        thinq.onData(longFrame(3, payload))
+        dev.setProperty('smart_pairing', 'Towels')
+        assert.equal(thinq.outbox.length, 0)
+        thinq.onData(status(1))
+        payload[9] = 0
+        thinq.onData(longFrame(3, payload))
+        dev.setProperty('smart_pairing', 'Normal')
+        assert.equal(thinq.outbox.length, 0)
+        thinq.onData(status(0))
+        dev.setProperty('smart_pairing', 'Towels')
+        assert.equal(thinq.outbox.length, 1)
+        dev.drop()
+    })
+
+    test('timeout never retries or accepts a late reply and blocks bridge and own writes until reconnect', (t) => {
+        t.mock.timers.enable({ apis: ['setTimeout'] })
+        const { ha, thinq, dev } = makeDevice()
+        thinq.onData(status(0))
+        dev.setProperty('smart_pairing', 'Towels')
+        const write = thinq.outbox[0]
+        dev.setProperty('smart_pairing', 'Normal')
+        t.mock.timers.tick(3000)
+        thinq.onData(reply(write))
+        dev.setProperty('smart_pairing', 'Bedding')
+        sendCloud(thinq, write)
+        t.mock.timers.tick(30_000)
+        assert.equal(thinq.outbox.length, 1)
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /reconnect required/)
+        assert.equal(ha.devices[DEVICE_ID].properties.course, 'Timed Dry')
+        dev.drop()
+    })
 })

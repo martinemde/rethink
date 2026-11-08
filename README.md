@@ -162,6 +162,33 @@ See also the [Home Assistant App](https://github.com/anszom/rethink-ha/tree/mast
 
 [![Open your Home Assistant instance and show the add app repository dialog with the repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fanszom%2Frethink-ha)
 
+## Dryer Smart Pairing command
+
+For BDVG_FX0003_US, publish a non-retained course label to
+`rethink/<id>/smart_pairing/set` (replace `rethink` if the MQTT prefix is configured
+otherwise). Example payload: `Towels`. This command only recommends a course; it
+does not select the current course, power on, start, or pair automatically after a
+washer finishes. There is no discovery entity or pending-pairing state/readback.
+
+Payloads are exact, case-sensitive existing dryer course labels:
+AI Dry, Timed Dry, Bedding, Steam Sanitary, Towels, Delicates, Normal, Quick Dry,
+Power Dry, Steam Fresh, Air Dry, Jeans, Blanket Refresh, Perm. Press, Heavy Duty,
+Super Dry, Active Wear, Low Temp Dry, Overnight Dry, Easy Ironing, Small Load,
+Large Load Dry, X Large Load Dry. Downloaded courses are not supported. Normal,
+Bedding and Towels have confirmed Smart Pairing evidence; other labels use the
+established ordinary dryer course IDs, not individually tested pairing values.
+
+The latest reported dryer state must be Off, Standby, End, or End remote maintain
+on, both when queued and when dispatched. Missing, unknown, active or paused
+states are rejected. This is the last report, not proof of current physical state;
+a silent Off dryer is allowed without an arbitrary report-age limit. Power/course
+boundaries invalidate this context until a new status report; no query is sent.
+Pairing uses the same own/bridge FIFO and fail-closed 3000ms timeout as other
+writes. There is no retry. A matching E6 result updates only existing command
+problem diagnostics; its appended record does not change selected course/options.
+Neither success nor unchanged status proves a pending recommendation, expiry or
+clearing. A new explicit command is needed for each recommendation.
+
 ## Management
 
 A simple web interface is available on a user-defined port (default: 44401). The interface supports:
