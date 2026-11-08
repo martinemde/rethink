@@ -10,8 +10,7 @@ import { Enum } from '@/util/enum'
 import { ENDING_MELODY } from './ending_melody'
 import crc16 from '@/util/crc16'
 
-// LG WM6700HBA front-load washer. FAFXU25006's framing, but a 51-byte record and different
-// temperature codes.
+// LG WM6700HBA front-load washer: long AABB frames carrying a 51-byte record.
 //
 //     aa ff 20 0a 00 78 00 05 94 00 01 00 ec 00 66 <payload> <chk16> bb
 //           │  │  └─┬─┘    └─┬─┘       │  │  └─┬─┘
@@ -61,13 +60,9 @@ const DOOR_EVENT_VALUE_OFFSET = 18
 const DOOR_OPEN = 1
 const DOOR_SHUT = 2
 
+// The d8 frame carries the wash count since Tub Clean, not the ezDispense drawer.
+// Ignore it; drawer state comes from record39 bit0x04.
 //     aa 07 20 d8 17 <chk> bb
-//              │  │
-//              │  └ 0 open, else the wash count (rec[28])
-//              └ ezDispense drawer
-const DRAWER_FRAME_TYPE = 0xd8
-const DRAWER_BUF_LEN = 3
-const DRAWER_OPEN = 0
 
 // Set property:
 //
@@ -152,7 +147,7 @@ const COURSE_OFFSET = 5
 const RESERVE_TIME_OFFSET = 11 // minutes; all time counts are big-endian
 const REMAIN_TIME_OFFSET = 13
 const INITIAL_TIME_OFFSET = 15
-const SPENT_POWER_OFFSET = 17 // Wh, big-endian; user-selected local interpretation
+const SPENT_POWER_OFFSET = 17 // Wh, big-endian
 const LOADED_COURSE_OFFSET = 20 // = rec[5], except where rec[5] is 0xff (a downloaded course)
 const STATE_OFFSET = 21
 const TUB_CLEAN_COUNT_OFFSET = 28
@@ -184,6 +179,7 @@ const OPT3_FRESH_CARE = 0x40
 
 const OPT4_OFFSET = 37
 const OPT4_CONTROL_LOCK = 0x20
+// Set while Remote Start is armed and during cycles, even when not armed at the panel.
 const OPT4_REMOTE_START = 0x10
 const DOOR_LOCK_MASK = 0x01
 
@@ -195,9 +191,9 @@ const OPT5_LOW_DETERGENT = 0x02
 const OPT5_DRAWER_CLOSED = 0x04
 
 const OPT6_OFFSET = 40
-// Set and cleared with f0 24 10 01 <1|0>, which the cloud sends in answer to the washer's 7f 03 after a
-// reconnect; the LG cloud sends this washer 0, overriding a setting from HA. While set, a cycle ends in End remote maintain on and the washer stays
-// on, instead of reporting End and powering itself off ~17 s later.
+// Keep Remote Start On (remoteMaintain): set and cleared with f0 24 10 01 <1|0>.
+// The cloud sends 0 at cycle start and after reconnect, overriding a setting from HA.
+// While set, a cycle ends in End remote maintain on instead of powering off ~17 s later.
 const OPT6_REMOTE_MAINTAIN = 0x04
 const OPT6_CYCLE_OPTIMIZATION = 0x08
 
@@ -1179,7 +1175,6 @@ export default class Device extends AABBDevice {
 
     processAABB(buf: Buffer) {
         if (buf.length < 2 || buf[0] !== CLASS_BYTE) return
-        if (buf[1] === DRAWER_FRAME_TYPE) return this.processDrawer(buf)
         if (buf[1] === COMMAND_REPLY_TYPE) return this.processCommandReply(buf)
         if (buf[1] === WRITE_REPLY_TYPE) {
             if (buf.length < 7 || buf[2] !== 0 || buf[3] !== 2 || buf[4] !== 1 || ![0xff, 0x33].includes(buf[5])) return
@@ -1345,11 +1340,6 @@ export default class Device extends AABBDevice {
         if (door !== DOOR_OPEN && door !== DOOR_SHUT) return
         this.publishProperty('door', door === DOOR_OPEN ? 'ON' : 'OFF')
         this.receipts.door()
-    }
-
-    private processDrawer(buf: Buffer) {
-        if (buf.length !== DRAWER_BUF_LEN) return
-        this.publishProperty('drawer', buf[2] === DRAWER_OPEN ? 'ON' : 'OFF')
     }
 
     private processStatus(buf: Buffer, recordOffset: number, expectedLen: number) {

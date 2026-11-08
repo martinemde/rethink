@@ -10,8 +10,7 @@ import { Enum } from '@/util/enum'
 import crc16 from '@/util/crc16'
 import { ENDING_MELODY } from './ending_melody'
 
-// LG DLEX6700B electric dryer. BDH_D30007_US's framing and 42-byte record, but with a temperature
-// setting and different option bits.
+// LG DLEX6700B electric dryer: long AABB frames carrying a 42-byte record.
 //
 //     aa ff 30 0a 00 66 00 06 9c 00 01 00 ec 00 54 <payload> <chk16> bb
 //           │  │  └─┬─┘    └─┬─┘       │  │  └─┬─┘
@@ -143,6 +142,7 @@ const OPT2_ENERGY_SAVER = 0x80 // app only
 
 const OPT3_OFFSET = 26
 const OPT3_CONTROL_LOCK = 0x10
+// Set while Remote Start is armed and during cycles, even when not armed at the panel.
 const OPT3_REMOTE_START = 0x40
 
 const OPT4_OFFSET = 27
