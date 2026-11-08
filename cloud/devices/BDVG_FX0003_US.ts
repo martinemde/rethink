@@ -66,6 +66,9 @@ const PROP_MELODY = 0x50
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_KEEP_FRESH = 0x57
 const PROP_CLOCK_DISPLAY = 0x58
+const PROP_TIME_FORMAT = 0x59
+const PROP_DATE_DISPLAY = 0x5a
+const TIME_FORMAT = Enum.of({ '12-hour': 0, '24-hour': 1 })
 
 const COURSE_DOWNLOADED = 0xff
 const CYCLE = Enum.of({ start: 1, pause: 2, resume: 3 })
@@ -151,6 +154,8 @@ const OPT4_CYCLE_OPTIMIZATION = 0x01
 const OPT5_OFFSET = 28
 const OPT5_KEEP_FRESH = 0x10
 const OPT5_CLOCK_DISPLAY = 0x20
+const OPT5_TIME_FORMAT = 0x40
+const OPT5_DATE_DISPLAY = 0x80
 
 const STATE_POWEROFF = 0
 
@@ -535,6 +540,30 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:clock-outline',
                         entity_category: 'config',
                     },
+                    time_format: {
+                        platform: 'select',
+                        unique_id: '$deviceid-time_format',
+                        state_topic: '$this/time_format',
+                        command_topic: '$this/time_format/set',
+                        options: TIME_FORMAT.options,
+                        retain: false,
+                        optimistic: false,
+                        name: 'Time format',
+                        icon: 'mdi:clock-outline',
+                        entity_category: 'config',
+                    },
+                    date_display: {
+                        platform: 'switch',
+                        device_class: 'switch',
+                        unique_id: '$deviceid-date_display',
+                        state_topic: '$this/date_display',
+                        command_topic: '$this/date_display/set',
+                        retain: false,
+                        optimistic: false,
+                        name: 'Date display',
+                        icon: 'mdi:calendar',
+                        entity_category: 'config',
+                    },
                     melody: {
                         platform: 'select',
                         unique_id: '$deviceid-melody',
@@ -706,6 +735,8 @@ export default class Device extends AABBDevice {
             [PROP_SPLASH_SCREEN, rec[SPLASH_SCREEN_OFFSET]],
             [PROP_KEEP_FRESH, bit(rec[OPT5_OFFSET], OPT5_KEEP_FRESH)],
             [PROP_CLOCK_DISPLAY, bit(rec[OPT5_OFFSET], OPT5_CLOCK_DISPLAY)],
+            [PROP_TIME_FORMAT, bit(rec[OPT5_OFFSET], OPT5_TIME_FORMAT)],
+            [PROP_DATE_DISPLAY, bit(rec[OPT5_OFFSET], OPT5_DATE_DISPLAY)],
             [PROP_CYCLE_OPTIMIZATION, bit(rec[OPT4_OFFSET], OPT4_CYCLE_OPTIMIZATION)],
             ...BUNDLE.map(
                 ({ prop, key }) =>
@@ -755,7 +786,15 @@ export default class Device extends AABBDevice {
         this.publishProperty(key, value)
     }
 
+    private clockSettingAllowed(prop: number) {
+        if (![PROP_TIME_FORMAT, PROP_DATE_DISPLAY].includes(prop)) return true
+        if (this.reported.get(PROP_CLOCK_DISPLAY) === 1) return true
+        this.setProblem('Command needs Clock display enabled in reported status')
+        return false
+    }
+
     private writeProps(...pairs: number[]) {
+        if (!this.clockSettingAllowed(pairs[0])) return
         if (!this.writable(pairs[0] === PROP_POWER)) return
         if (this.pendingBundle) this.group++
         this.pendingBundle = undefined
@@ -772,6 +811,7 @@ export default class Device extends AABBDevice {
             () => {
                 if (this.pending.get(prop)?.owner === owner) this.pending.delete(prop)
                 if (!this.writable(prop === PROP_POWER)) return
+                if (!this.clockSettingAllowed(prop)) return
                 if (prop === PROP_CYCLE && (!this.course?.code || this.course.code === COURSE_DOWNLOADED)) {
                     this.setProblem(NO_COURSE_REASON)
                     return
@@ -882,6 +922,11 @@ export default class Device extends AABBDevice {
             if (value === 'ON' || value === 'OFF') this.writeKeepRemoteStart(value === 'ON' ? 1 : 0)
         } else if (prop === 'clock_display') {
             if (value === 'ON' || value === 'OFF') this.writeProps(PROP_CLOCK_DISPLAY, value === 'ON' ? 1 : 0)
+        } else if (prop === 'time_format') {
+            const idx = TIME_FORMAT.unmap(value)
+            if (idx !== undefined) this.writeProps(PROP_TIME_FORMAT, idx)
+        } else if (prop === 'date_display') {
+            if (value === 'ON' || value === 'OFF') this.writeProps(PROP_DATE_DISPLAY, value === 'ON' ? 1 : 0)
         } else if (prop === 'melody') {
             const idx = ENDING_MELODY.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_MELODY, idx)
@@ -1077,6 +1122,8 @@ export default class Device extends AABBDevice {
         else if (prop === PROP_SPLASH_SCREEN) this.publishProperty('splash_screen', SPLASH_SCREEN.map(raw))
         else if (prop === PROP_KEEP_FRESH) this.publishProperty('keep_fresh', onOff(raw !== 0))
         else if (prop === PROP_CLOCK_DISPLAY) this.publishProperty('clock_display', onOff(raw !== 0))
+        else if (prop === PROP_TIME_FORMAT) this.publishProperty('time_format', TIME_FORMAT.map(raw))
+        else if (prop === PROP_DATE_DISPLAY) this.publishProperty('date_display', onOff(raw !== 0))
         else if (prop === PROP_CYCLE_OPTIMIZATION) this.publishProperty('cycle_optimization', onOff(raw !== 0))
     }
 
@@ -1233,6 +1280,18 @@ export default class Device extends AABBDevice {
             'clock_display',
             bit(rec[OPT5_OFFSET], OPT5_CLOCK_DISPLAY),
             onOff((rec[OPT5_OFFSET] & OPT5_CLOCK_DISPLAY) !== 0),
+        )
+        this.publishSetting(
+            PROP_TIME_FORMAT,
+            'time_format',
+            bit(rec[OPT5_OFFSET], OPT5_TIME_FORMAT),
+            TIME_FORMAT.map(bit(rec[OPT5_OFFSET], OPT5_TIME_FORMAT)),
+        )
+        this.publishSetting(
+            PROP_DATE_DISPLAY,
+            'date_display',
+            bit(rec[OPT5_OFFSET], OPT5_DATE_DISPLAY),
+            onOff((rec[OPT5_OFFSET] & OPT5_DATE_DISPLAY) !== 0),
         )
         this.publishSetting(PROP_MELODY, 'melody', rec[MELODY_OFFSET], ENDING_MELODY.map(rec[MELODY_OFFSET]))
         this.publishSetting(

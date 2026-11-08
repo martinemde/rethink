@@ -1252,6 +1252,8 @@ describe('FAFXU22007', () => {
             melody: 'Normal',
             splash_screen: 'Normal',
             clock_display: 'OFF',
+            time_format: '12-hour',
+            date_display: 'OFF',
             low_detergent: 'OFF',
             low_softener: 'OFF',
             drawer: 'OFF',
@@ -2704,5 +2706,164 @@ describe('FAFXU22007 newer reconciliation', () => {
         thinq.onData(checksum(off))
         assert.equal(ha.devices[DEVICE_ID].properties.status, 'Off')
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
+    })
+})
+
+describe('FAFXU22007 confirmed clock settings', () => {
+    // Synthetic variations of existing sanitized records, not new physical captures.
+    const record = (shown = true, format = 0, date = 0) => {
+        const rec = currentRecord()
+        rec[47] = (rec[47] & ~128) | (shown ? 128 : 0)
+        rec[49] = (rec[49] & ~6) | (format ? 2 : 0) | (date ? 4 : 0)
+        return rec
+    }
+    const status = (rec: Buffer, previous?: Buffer) => {
+        const payload = previous ? Buffer.concat([previous, rec]) : rec
+        const frame = Buffer.alloc(payload.length + 18)
+        frame.set([0xaa, 0xff, 32, 0x0a])
+        frame.writeUInt16BE(frame.length, 4)
+        frame[12] = previous ? 0xec : 0xeb
+        frame.writeUInt16BE(payload.length, 13)
+        frame.set(payload, 15)
+        frame[frame.length - 1] = 0xbb
+        frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
+        return frame
+    }
+    test('Configuration discovery and EB/current EC readback retain settings while clock hidden', () => {
+        const { ha, thinq, dev } = makeDevice()
+        dev.publishConfig()
+        const c = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        assert.deepEqual(c.time_format.options, ['12-hour', '24-hour'])
+        for (const key of ['time_format', 'date_display']) {
+            assert.equal(c[key].entity_category, 'config')
+            assert.equal(c[key].optimistic, false)
+            assert.equal(c[key].retain, false)
+            assert.equal(c[key].command_topic, `$this/${key}/set`)
+        }
+        for (const shown of [false, true])
+            for (const format of [0, 1])
+                for (const date of [0, 1]) {
+                    const rec = record(shown, format, date)
+                    rec[49] |= 249
+                    for (const frame of [status(rec), status(rec, record(!shown, 1 - format, 1 - date))]) {
+                        thinq.onData(frame)
+                        const p = ha.devices[DEVICE_ID].properties
+                        assert.equal(p.clock_display, shown ? 'ON' : 'OFF')
+                        assert.equal(p.time_format, format ? '24-hour' : '12-hour')
+                        assert.equal(p.date_display, date ? 'ON' : 'OFF')
+                    }
+                }
+        assert.deepEqual(thinq.outbox, [])
+        dev.drop()
+    })
+    test('exact singleton encoding; accepted actual E6 feedback only, never requested echoes', () => {
+        for (const [key, value, prop, raw] of [
+            ['time_format', '24-hour', 0x59, 1],
+            ['time_format', '12-hour', 0x59, 0],
+            ['date_display', 'ON', 0x5a, 1],
+            ['date_display', 'OFF', 0x5a, 0],
+        ] as const)
+            for (const result of [0, 3]) {
+                const { ha, thinq, dev } = makeDevice()
+                const before = record(true, prop === 0x59 ? 1 - raw : 0, prop === 0x5a ? 1 - raw : 0)
+                thinq.onData(status(before))
+                const oldValue = ha.devices[DEVICE_ID].properties[key]
+                dev.setProperty(key, value)
+                const expected = Buffer.from([0xaa, 13, 0xf0, 0xe5, 0, 2, 1, 0xff, 1, prop, raw, 0, 0xbb])
+                expected[11] = (expected.subarray(0, 11).reduce((a, b) => a + b, 0) & 255) ^ 0x55
+                assert.deepEqual(thinq.outbox, [expected])
+                assert.equal(ha.devices[DEVICE_ID].properties[key], oldValue)
+                const after = record(true, prop === 0x59 ? raw : 0, prop === 0x5a ? raw : 0)
+                thinq.onData(reply([prop], after, [result]))
+                assert.equal(ha.devices[DEVICE_ID].properties[key], result === 0 ? value : oldValue)
+                dev.drop()
+            }
+    })
+    test('successful E6 with unchanged actual setting never echoes the requested format/date', () => {
+        for (const [key, value, prop] of [
+            ['time_format', '24-hour', 0x59],
+            ['date_display', 'ON', 0x5a],
+        ] as const) {
+            const { ha, thinq, dev } = makeDevice()
+            const unchanged = record()
+            thinq.onData(status(unchanged))
+            const before = ha.devices[DEVICE_ID].properties[key]
+            dev.setProperty(key, value)
+            thinq.onData(reply([prop], unchanged))
+            assert.equal(ha.devices[DEVICE_ID].properties[key], before)
+            dev.drop()
+        }
+    })
+    test('missing, hidden and powered-off contexts and invalid payloads cannot send or enable clock', () => {
+        const { thinq, dev } = makeDevice()
+        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('date_display', 'ON')
+        thinq.onData(status(record(false, 1, 1)))
+        dev.setProperty('time_format', '12-hour')
+        dev.setProperty('date_display', 'OFF')
+        thinq.onData(status(record()))
+        for (const value of ['', '1', '0', '24', '12 hour', 'ON', '24-hour ']) dev.setProperty('time_format', value)
+        for (const value of ['', '1', '0', 'on', 'OFF ']) dev.setProperty('date_display', value)
+        const off = record()
+        off[21] = 0
+        thinq.onData(status(off))
+        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('date_display', 'ON')
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(
+            thinq.sent.filter((m) => m.cmd !== 'ack'),
+            [],
+        )
+        dev.drop()
+    })
+    test('accepted format overlay preserves sibling date/visibility, then expires without synthetic reset', (ctx) => {
+        const now = Date.now()
+        const clock = ctx.mock.method(Date, 'now', () => now)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.onData(status(record()))
+        dev.setProperty('time_format', '24-hour')
+        const after = record(true, 1, 0)
+        thinq.onData(reply([0x59], after))
+        assert.equal(ha.devices[DEVICE_ID].properties.time_format, '24-hour')
+        clock.mock.mockImplementation(() => now + 29_999)
+        thinq.onData(status(record(false, 0, 1)))
+        assert.equal(ha.devices[DEVICE_ID].properties.time_format, '24-hour')
+        assert.equal(ha.devices[DEVICE_ID].properties.date_display, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+        clock.mock.mockImplementation(() => now + 30_001)
+        thinq.onData(status(record(false, 0, 1)))
+        assert.equal(ha.devices[DEVICE_ID].properties.time_format, '12-hour')
+        assert.equal(ha.devices[DEVICE_ID].properties.date_display, 'ON')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
+        dev.drop()
+    })
+    test('accepted visibility alone cannot unlock format/date before a status report confirms it', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.onData(status(record(false)))
+        dev.setProperty('clock_display', 'ON')
+        const after = record(true)
+        thinq.onData(reply([0x58], after))
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
+        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('date_display', 'ON')
+        assert.equal(thinq.outbox.length, 1)
+        thinq.onData(status(after))
+        dev.setProperty('time_format', '24-hour')
+        assert.equal(thinq.outbox.length, 2)
+        dev.drop()
+    })
+    test('queued settings recheck raw reported clock at dispatch', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.onData(status(record()))
+        dev.setProperty('buzzer', 'High')
+        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('date_display', 'ON')
+        const rec = record(false, 1, 1)
+        thinq.onData(status(rec))
+        thinq.onData(reply([0x13], rec))
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
+        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /Clock display/)
+        dev.drop()
     })
 })

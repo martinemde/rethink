@@ -284,3 +284,41 @@ configurable Home Assistant policy. Native `load_waiting` and `load_removed` are
 withdrawn with platform-only discovery tombstones; other components are preserved.
 The historical `laundry-state.json` is no longer read or written. Leave any
 production copy untouched; removal is not a deployment requirement.
+
+## Confirmed time format and date display (2026-11-08)
+
+The user confirmed reciprocal physical LG app tests on both models, with matched
+E6 replies and current EC records. This supersedes the earlier exclusion of
+12/24-hour and date controls; existing visibility property `0x58` is unchanged.
+Only the relevant mappings are recorded here; complete packets and appliance
+identities remain in private captures, not this repository.
+
+| Setting      | E5 property/value                | Washer current record | Dryer current record |
+| ------------ | -------------------------------- | --------------------- | -------------------- |
+| Time format  | `0x59`: 0 = 12-hour, 1 = 24-hour | byte49 mask `0x02`    | byte28 mask `0x40`   |
+| Date display | `0x5a`: 0 = Off, 1 = On          | byte49 mask `0x04`    | byte28 mask `0x80`   |
+
+Both models expose `time_format` as a select and `date_display` as a switch,
+alongside existing `clock_display`, all in Configuration. Changes require a
+known powered-on context and **reported Clock display enabled**. The raw latest
+status, not a requested/accepted visibility overlay, gates enqueue and dispatch.
+An accepted visibility E6 alone does not unlock these setters until a subsequent
+EB/EC confirms visibility; this conservative gate deliberately does not reuse the
+bounded accepted-state overlay. A command queued before a hidden-clock report is
+rejected when dispatched. No
+command automatically enables the clock or powers on the appliance. Hiding the
+clock does not clear or synthesize format/date readback.
+
+These singleton properties join each model's existing matching-reply, bounded
+30-second feedback and queue/arbitration paths. Washer overlays alter only each
+field's mask; dryer reports/accepted feedback use separate property keys, keeping
+Keep fresh and the visibility bit independent. The existing 3000ms fail-closed
+timeout is unchanged. No polling, startup query, retry, time sync or new ACK
+behavior is added. Packet inspector labels include both new fields.
+
+Offline tests use synthetic variations of existing sanitized fixtures, not newly
+claimed physical captures. They cover both values, hidden-clock readback,
+EB/current EC selection, matching accepted/refused E6 feedback, exact singleton
+checksums, invalid input, absent/Off context and dispatch-time visibility changes.
+Implementation and validation send no appliance traffic; deployment and live HA
+acceptance are separately owned by the parent operator.

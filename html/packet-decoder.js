@@ -20,6 +20,8 @@ const COMMON_PROPS = {
     76: 'Cycle optimization',
     81: 'Splash screen',
     88: 'Clock display',
+    89: 'Time format',
+    90: 'Date display',
 }
 const MODELS = {
     FAFXU22007: {
@@ -75,6 +77,8 @@ const MODELS = {
             [40, 8, 'Cycle optimization'],
             [50, 4, 'Quick load sense'],
             [47, 128, 'Clock display'],
+            [49, 2, 'Time format'],
+            [49, 4, 'Date display'],
         ],
     },
     BDVG_FX0003_US: {
@@ -117,6 +121,8 @@ const MODELS = {
             [27, 2, 'Remote maintain'],
             [28, 16, 'Keep fresh'],
             [28, 32, 'Clock display'],
+            [28, 64, 'Time format'],
+            [28, 128, 'Date display'],
         ],
     },
 }
@@ -226,7 +232,17 @@ export function decodePacket(input, { model } = {}) {
         }))
         fields.push(
             ...profile.bits.map(([offset, mask, label]) => ({
-                ...field(label, label, [record[offset]], 'known', Boolean(record[offset] & mask)),
+                ...field(
+                    label,
+                    label,
+                    [record[offset]],
+                    'known',
+                    label === 'Time format'
+                        ? record[offset] & mask
+                            ? '24-hour'
+                            : '12-hour'
+                        : Boolean(record[offset] & mask),
+                ),
                 offset,
                 width: 1,
                 mask,

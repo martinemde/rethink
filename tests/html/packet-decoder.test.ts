@@ -191,3 +191,39 @@ test('washer EC validates both markers; dryer records do not require a zero mark
     assert.equal(decodePacket(envelope(0x30, 0xeb, dryerRecord), { model: dryer }).valid, true)
     assert.equal(decodePacket(envelope(0x30, 0xec, [...dryerRecord, ...dryerRecord]), { model: dryer }).valid, true)
 })
+
+test('clock settings labels and masks follow current records for both models', () => {
+    for (const [model, classByte, length, offset, formatMask, dateMask] of [
+        [washer, 0x20, 51, 49, 2, 4],
+        [dryer, 0x30, 42, 28, 64, 128],
+    ] as const) {
+        for (const format of [0, 1])
+            for (const date of [0, 1]) {
+                const record = Array(length).fill(0)
+                record[offset] = (format ? formatMask : 0) | (date ? dateMask : 0)
+                const decoded = decodePacket(
+                    envelope(classByte, 0xec, [
+                        ...Array(length)
+                            .fill(0xff)
+                            .map((v, i) => (i ? v : 0)),
+                        ...record,
+                    ]),
+                    { model },
+                )
+                assert.equal(decoded.valid, true)
+                assert.equal(
+                    decoded.status.fields.find((f: any) => f.label === 'Time format').value,
+                    format ? '24-hour' : '12-hour',
+                )
+                assert.equal(decoded.status.fields.find((f: any) => f.label === 'Date display').value, Boolean(date))
+            }
+        for (const [id, label] of [
+            [0x59, 'Time format'],
+            [0x5a, 'Date display'],
+        ] as const) {
+            const decoded = decodePacket(short([0xf0, 0xe5, 0, 2, 1, 0xff, 1, id, 1]), { model })
+            assert.equal(decoded.valid, true)
+            assert.equal(decoded.fields.find((f: any) => f.key === `property_${id}`).label, label)
+        }
+    }
+})
