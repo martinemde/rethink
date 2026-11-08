@@ -56,6 +56,7 @@ const SINGLE_BUF_LEN = 13 + SINGLE_INNER_LEN + 1
 //                             │    └ (prop, value) × count; the minute props (0x70) take 2 bytes, big-endian
 //                             └ count
 const SET_PROPERTY = [0xf0, 0xe5, 0x00, 0x02, 0x01, 0xff]
+const SET_SMART_PAIRING = [0xf0, 0xe5, 0x00, 0x01, 0x01, 0xff, 0x02, 0x3d, 0x01, 0x0a]
 const PROP_POWER = 0x02
 const PROP_CYCLE = 0x03
 const PROP_COURSE = 0x0a // 0xff, then PROP_DOWNLOADED_COURSE, for a downloaded course
@@ -650,6 +651,7 @@ export default class Device extends AABBDevice {
     // by a record with a course.
     private problem?: string
     private course?: { code: number; downloaded: number; on: boolean }
+    private pairingState?: number
 
     private setProblem(reason: string | undefined) {
         if (reason === this.problem) return
@@ -688,6 +690,7 @@ export default class Device extends AABBDevice {
     private acceptedPower?: { value: boolean; expires: number }
 
     private boundary() {
+        this.pairingState = undefined
         this.acceptedPower = undefined
         this.generation++
         this.previousCourse = undefined
@@ -696,6 +699,7 @@ export default class Device extends AABBDevice {
     }
 
     drop() {
+        this.pairingState = undefined
         this.acceptedPower = undefined
         this.accepted.clear()
         this.pending.clear()
@@ -822,6 +826,29 @@ export default class Device extends AABBDevice {
         )
     }
 
+    private pairingAllowed() {
+        if (this.writesBlocked) return false
+        if (this.pairingState === undefined) {
+            this.setProblem('Smart Pairing needs a reported dryer status')
+            return false
+        }
+        if (![0, 1, 4, 22].includes(this.pairingState)) {
+            this.setProblem('Smart Pairing needs an idle dryer')
+            return false
+        }
+        return true
+    }
+
+    private writeSmartPairing(course: number) {
+        if (!this.pairingAllowed()) return
+        this.pendingBundle = undefined
+        this.group++
+        this.queueWrite(() => {
+            if (!this.pairingAllowed()) return
+            return Buffer.from([...SET_SMART_PAIRING, course])
+        })
+    }
+
     private writeKeepRemoteStart(value: number) {
         if (this.writesBlocked) return
         // This command is independent of E5 settings, but must not split or coalesce across bundles.
@@ -933,6 +960,9 @@ export default class Device extends AABBDevice {
         } else if (prop === 'splash_screen') {
             const idx = SPLASH_SCREEN.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_SPLASH_SCREEN, idx)
+        } else if (prop === 'smart_pairing') {
+            const code = COURSE.unmap(value)
+            if (code !== undefined) this.writeSmartPairing(code)
         } else if (prop === 'course') {
             const code = COURSE.unmap(value)
             const downloaded = DOWNLOADED_COURSE.unmap(value)
@@ -1015,7 +1045,9 @@ export default class Device extends AABBDevice {
     // Only a reply to a write from HA counts toward the problem sensor: one to the cloud's says nothing
     // about ours.
     private processWriteReply(buf: Buffer) {
-        if (buf.length < 7 || !buf.subarray(0, 6).equals(Buffer.from([0x30, 0xe6, 0, 2, 1, 0xff]))) return
+        if (buf.length < 7 || buf[0] !== CLASS_BYTE || buf[1] !== WRITE_REPLY_TYPE) return
+        const pairing = buf.subarray(2, 6).equals(Buffer.from(SET_SMART_PAIRING.slice(2, 6)))
+        if (!pairing && !buf.subarray(2, 6).equals(Buffer.from(SET_PROPERTY.slice(2)))) return
         const count = buf[6]
         if (count === undefined) return
         const end = 7 + count * 2
@@ -1025,11 +1057,17 @@ export default class Device extends AABBDevice {
         if (props.size !== count) return
         const write = this.writeAnswered(SET_PROPERTY[1], (candidate) => {
             const values = this.propertyValues(candidate.inner)
-            return !!values && values.size === props.size && [...values.keys()].every((prop) => props.has(prop))
+            return (
+                candidate.inner.subarray(2, 5).equals(buf.subarray(2, 5)) &&
+                !!values &&
+                values.size === props.size &&
+                [...values.keys()].every((prop) => props.has(prop))
+            )
         })
         if (!write) return
         const context = this.sentContext.shift()
-        if (context?.generation === this.generation) this.takeInWrite(write.inner, buf, context.reported)
+        // A recommendation is not a selected-course write. Its appended record is not readback.
+        if (!pairing && context?.generation === this.generation) this.takeInWrite(write.inner, buf, context.reported)
         if (!write.own) return
         const failed = [...Array(count).keys()]
             .map((i) => buf[WRITE_REPLY_RESULT_OFFSET + 2 * i])
@@ -1145,6 +1183,9 @@ export default class Device extends AABBDevice {
     // After a remote power change the dryer may send no record, only these events.
     private processEvent(payload: Buffer) {
         const on = payload[EVENT_POWER_OFFSET] !== 0
+        // Event power evidence is not an idle status record.
+        if (this.pairingState !== undefined && (this.pairingState !== STATE_POWEROFF) !== on)
+            this.pairingState = undefined
         if (!on) this.completionState = 'unarmed'
         if (!on && this.course?.on) {
             this.boundary()
@@ -1215,6 +1256,7 @@ export default class Device extends AABBDevice {
         if ([0, 1].includes(state)) this.completionState = 'unarmed'
         else if ([7, 8].includes(state)) this.completionState = 'armed'
         this.takeInCourse(rec)
+        this.pairingState = state
         this.bundle.set('steam', bit(rec[OPT2_OFFSET], OPT2_STEAM))
         this.bundle.set('damp_dry_signal', bit(rec[OPT1_OFFSET], OPT1_DAMP_DRY_SIGNAL))
         this.bundle.set('energy_saver', bit(rec[OPT2_OFFSET], OPT2_ENERGY_SAVER))

@@ -284,24 +284,32 @@ export function decodePacket(input, { model } = {}) {
     } else if (type === 0xe5 || type === 0xe6) {
         const reply = type === 0xe6
         out.summary = reply ? 'Property reply (E6)' : 'Property write (E5)'
-        if (
-            end < 9 ||
-            bytes[4] !== 0 ||
-            bytes[5] !== 2 ||
-            bytes[6] !== 1 ||
-            ![0xff, 0x33, 0x34].includes(bytes[7]) ||
-            !bytes[8]
-        ) {
+        // This exact dryer header is verified; its individual bytes are not understood.
+        const pairing =
+            profile === MODELS.BDVG_FX0003_US &&
+            bytes[2] === (reply ? 0x30 : 0xf0) &&
+            hex(bytes.slice(4, 8)) === '000101ff'
+        const localHeader = bytes[4] === 0 && bytes[5] === 2 && bytes[6] === 1 && [0xff, 0x33, 0x34].includes(bytes[7])
+        if (end < 9 || !(pairing || localHeader) || !bytes[8] || (pairing && bytes[8] !== 2)) {
             out.errors.push('Invalid property header')
             segment('unknown', 'Property body', 4, end)
             return finish()
         }
-        segment('properties', 'Property header', 4, 9, [field('count', 'Property count', [bytes[8]])])
+        if (pairing) out.summary = reply ? 'Smart Pairing property reply (E6)' : 'Smart Pairing property write (E5)'
+        segment('properties', pairing ? 'Smart Pairing property header' : 'Property header', 4, 9, [
+            field('count', 'Property count', [bytes[8]]),
+        ])
         let pos = 9
         const ids = new Set()
         for (let i = 0; i < bytes[8]; i++) {
             const id = bytes[pos],
-                label = property(id)
+                pairingFlag = pairing && id === 0x3d,
+                label = pairingFlag ? 'Smart Pairing flag' : property(id)
+            if (pairing && id !== 0x3d && id !== 0x0a) {
+                out.errors.push('Unsupported Smart Pairing property')
+                segment('unknown', 'Smart Pairing property bytes', pos, end)
+                return finish()
+            }
             if (ids.has(id)) {
                 out.errors.push('Duplicate property')
                 break
@@ -318,13 +326,18 @@ export function decodePacket(input, { model } = {}) {
             }
             const raw = bytes.slice(pos + 1, pos + 1 + width),
                 value = number(raw)
+            if (pairingFlag && !reply && value !== 0 && value !== 1) out.errors.push('Invalid Smart Pairing boolean')
             segment('property', (label || 'Property 0x' + hex([id])) + (reply ? ' result' : ''), pos, pos + 1 + width, [
                 field(
                     'property_' + id,
                     label || 'Unknown property',
                     raw,
-                    label ? 'known' : 'unknown',
-                    reply ? (RESULTS[value] || 'unknown') + ' (0x' + hex(raw) + ')' : value,
+                    pairingFlag && !reply ? 'inferred' : label ? 'known' : 'unknown',
+                    reply
+                        ? (RESULTS[value] || 'unknown') + ' (0x' + hex(raw) + ')'
+                        : pairingFlag
+                          ? Boolean(value)
+                          : value,
                 ),
             ])
             pos += 1 + width

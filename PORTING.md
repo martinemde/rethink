@@ -322,3 +322,23 @@ EB/current EC selection, matching accepted/refused E6 feedback, exact singleton
 checksums, invalid input, absent/Off context and dispatch-time visibility changes.
 Implementation and validation send no appliance traffic; deployment and live HA
 acceptance are separately owned by the parent operator.
+
+## Confirmed dryer Smart Pairing command (2026-11-08)
+
+`smart_pairing/set` is command-only, using the existing non-retained MQTT command
+route; see README for exact topic, labels and last-reported idle gate. The body is
+`F0 E5 00 01 01 FF 02 3D 01 0A <course>`, distinct from normal course-setting
+header `00 02 01 FF`. The shared FIFO matches header family and exact property
+sets for E6; transport receipts do not settle a write. Smart Pairing's 42-byte
+reply record is deliberately excluded from normal accepted-course/option
+reconciliation. No optimistic selected course, pending state, automatic pairing,
+power-on/start, readback query or retry is introduced. Existing confirmation and
+timeout constants, completion events and course mappings are unchanged.
+
+Normal07 was captured from LG; Bedding04 and Towels02 were physically confirmed
+in separately authorized one-shot tests. Property3D=01 is confirmed as part of the
+whole command, not independently established as a flag. No pending-pairing bit,
+clear command, expiry or downloaded-course encoding is established. Inspector
+support explicitly recognizes this pairing header rather than relaxing normal
+property header validation. Offline tests use synthetic strict frames based on
+these confirmed bodies, not additional physical validation.

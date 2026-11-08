@@ -32,7 +32,10 @@ function unframe(packet: Buffer): Buffer | undefined {
 
 // E5 values are byte-wide except for the dry/reservation time fields in captured bundles.
 function properties(inner: Buffer, classByte: number): number[] | undefined {
-    if (inner.length < 7 || !inner.subarray(2, 5).equals(Buffer.from([0, 2, 1]))) return
+    if (inner.length < 7) return
+    const normal = inner.subarray(2, 5).equals(Buffer.from([0, 2, 1]))
+    const pairing = classByte === 0x30 && inner.subarray(2, 6).equals(Buffer.from([0, 1, 1, 0xff]))
+    if (!normal && !pairing) return
     if (inner[5] !== 0xff && inner[5] !== (classByte === 0x20 ? 0x33 : 0x34)) return
     const props: number[] = []
     let at = 7
@@ -201,7 +204,7 @@ export class LaundryMultiplexer extends Multiplexer {
         }
         if (request[1] !== 0xe5 || inner[1] !== 0xe6 || inner.length < 7) return false
         const props = properties(request, this.classByte)
-        if (!props?.length || inner[6] !== props.length || !inner.subarray(2, 5).equals(Buffer.from([0, 2, 1])))
+        if (!props?.length || inner[6] !== props.length || !inner.subarray(2, 5).equals(request.subarray(2, 5)))
             return false
         if (inner[5] !== 0xff && !(this.classByte === 0x20 && inner[5] === 0x33)) return false
         const end = 7 + props.length * 2

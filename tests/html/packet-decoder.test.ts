@@ -227,3 +227,54 @@ test('clock settings labels and masks follow current records for both models', (
         }
     }
 })
+
+test('explicit dryer Smart Pairing writes decode inferred boolean and course without broadening headers', () => {
+    for (const course of [0x02, 0x04, 0x07]) {
+        const decoded = decodePacket(short([0xf0, 0xe5, 0, 1, 1, 0xff, 2, 0x3d, 1, 0x0a, course]), { model: dryer })
+        assert.equal(decoded.valid, true)
+        assert.match(decoded.summary, /Smart Pairing/)
+        const flag = decoded.fields.find((f: any) => f.key === 'property_61')
+        assert.equal(flag.value, true)
+        assert.equal(flag.confidence, 'inferred')
+        assert.deepEqual(flag.raw, [1])
+        assert.equal(decoded.fields.find((f: any) => f.key === 'property_10').value, course)
+        assert.equal(decoded.status, null)
+    }
+    for (const [model, header, properties] of [
+        [washer, [0, 1, 1, 0xff], [2, 0x3d, 1, 0x0a, 4]],
+        [dryer, [0, 1, 1, 0x34], [2, 0x3d, 1, 0x0a, 4]],
+        [dryer, [0, 3, 1, 0xff], [2, 0x3d, 1, 0x0a, 4]],
+        [dryer, [0, 1, 1, 0xff], [1, 0x0a, 4]],
+        [dryer, [0, 1, 1, 0xff], [2, 0x13, 1, 0x0a, 4]],
+        [dryer, [0, 1, 1, 0xff], [2, 0x3d, 2, 0x0a, 4]],
+        [dryer, [0, 1, 1, 0xff], [2, 0x3d, 1, 0x3d, 1]],
+    ] as const) {
+        assert.equal(decodePacket(short([0xf0, 0xe5, ...header, ...properties]), { model }).valid, false)
+    }
+})
+
+test('Smart Pairing E6 uses result codes, one current record, and separate receipt and delivery ACKs', () => {
+    const record = Array(42).fill(0)
+    record[5] = 7
+    const body = [0x30, 0xe6, 0, 1, 1, 0xff, 2, 0x3d, 0, 0x0a, 0, ...record]
+    const decoded = decodePacket(short(body), { model: dryer })
+    assert.equal(decoded.valid, true)
+    assert.match(decoded.summary, /Smart Pairing/)
+    for (const id of [61, 10])
+        assert.equal(decoded.fields.find((f: any) => f.key === `property_${id}`).value, 'accepted (0x00)')
+    assert.equal(decoded.status.source, 'E6')
+    assert.equal(decoded.status.record.length, 42)
+    assert.equal(decoded.status.fields.find((f: any) => f.label === 'Course').value, 7)
+    assert.equal(decodePacket(short(body.slice(0, -1)), { model: dryer }).valid, false)
+    const receipt = decodePacket(short([0x30, 0, 0xe5, 0]), { model: dryer })
+    assert.equal(receipt.valid, true)
+    assert.equal(receipt.summary, 'Receipt ACK')
+    assert.equal(receipt.fields.find((f: any) => f.key === 'ackType').value, 0xe5)
+    assert.equal(receipt.fields.find((f: any) => f.key === 'result').value, 0)
+    assert.equal(receipt.status, null)
+    const delivery = decodePacket(short([0xf0, 0, 0xe6, 4]), { model: dryer })
+    assert.equal(delivery.valid, true)
+    assert.equal(delivery.summary, 'Delivery ACK')
+    assert.equal(delivery.fields.find((f: any) => f.key === 'ackType').value, 0xe6)
+    assert.equal(delivery.status, null)
+})
