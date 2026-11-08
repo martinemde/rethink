@@ -257,10 +257,12 @@ export function decodePacket(input, { model } = {}) {
         ])
         out.summary = 'Delivery ACK'
     } else if (type === 0) {
-        if (end !== 6) out.errors.push('Invalid receipt ACK length')
+        const sequenced = bytes[4] === 0x0b && end === 8
+        if (end !== 6 && !sequenced) out.errors.push('Invalid receipt ACK length')
         segment('ack', 'Receipt ACK', 4, end, [
             field('ackType', 'Acknowledged type', [bytes[4]]),
             field('result', 'Result', [bytes[5]]),
+            ...(sequenced ? [field('sequence', 'Sequence', bytes.slice(6, 8))] : []),
         ])
         out.summary = 'Receipt ACK'
     } else if (type === 0xe5 || type === 0xe6) {
