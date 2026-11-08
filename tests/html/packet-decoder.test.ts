@@ -156,7 +156,9 @@ test('washer and dryer envelope receipts include the acknowledged sequence', () 
         assert.equal(decoded.fields.find((f: any) => f.key === 'result').value, 0)
         assert.equal(decoded.fields.find((f: any) => f.key === 'sequence').value, sequence)
         frame[frame.length - 2] ^= 1
-        assert.equal(decodePacket(frame, { model: dryer }).valid, false)
+        const corrupted = decodePacket(frame, { model })
+        assert.equal(corrupted.valid, false)
+        assert.equal(corrupted.fields.find((f: any) => f.key === 'checksum').value, false)
     }
     assert.equal(decodePacket(short([0x30, 0, 0x66, 0]), { model: dryer }).valid, true)
     for (const tail of [[0x18], [0x18, 0xa0, 0]])
