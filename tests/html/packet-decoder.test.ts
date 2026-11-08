@@ -64,6 +64,19 @@ test('washer E5 variable width does not shift subsequent properties', () => {
     const unknown = decodePacket(short([0xf0, 0xe5, 0, 2, 1, 0xff, 1, 0xfe, 1, 2]), { model: washer })
     assert.deepEqual(unknown.unknowns[0].bytes, [0xfe, 1, 2])
 })
+test('dryer chime target supports writes and replies', () => {
+    const write = decodePacket(short([0xf0, 0xe5, 0, 2, 1, 0x34, 1, 0x13, 2]), { model: dryer })
+    assert.equal(write.valid, true)
+    assert.equal(write.fields.find((f: any) => f.key === 'property_19').value, 2)
+    const reply = decodePacket(short([0x30, 0xe6, 0, 2, 1, 0x34, 1, 0x13, 0x10, ...Array(42).fill(0)]), {
+        model: dryer,
+    })
+    assert.equal(reply.valid, true)
+    assert.equal(reply.status.source, 'E6')
+    assert.equal(reply.status.record.length, 42)
+    assert.equal(decodePacket(short([0xf0, 0xe5, 0, 2, 1, 0x35, 1, 0x13, 2]), { model: dryer }).valid, false)
+})
+
 test('dryer bundle minute width is two bytes', () => {
     const decoded = decodePacket(short([0xf0, 0xe5, 0, 2, 1, 0xff, 3, 0x20, 5, 0x70, 0, 60, 0x13, 4]), { model: dryer })
     assert.equal(decoded.valid, true)

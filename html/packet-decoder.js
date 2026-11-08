@@ -271,7 +271,7 @@ export function decodePacket(input, { model } = {}) {
             bytes[4] !== 0 ||
             bytes[5] !== 2 ||
             bytes[6] !== 1 ||
-            ![0xff, 0x33].includes(bytes[7]) ||
+            ![0xff, 0x33, 0x34].includes(bytes[7]) ||
             !bytes[8]
         ) {
             out.errors.push('Invalid property header')
