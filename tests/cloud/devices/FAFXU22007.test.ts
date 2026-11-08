@@ -1486,16 +1486,17 @@ describe('FAFXU22007', () => {
         assert.equal(p().door, 'OFF')
     })
 
-    test('the ezDispense drawer comes from its own short frame', () => {
+    test('wash-count d8 frames neither create nor change drawer state', () => {
         const { ha, thinq } = makeDevice()
         const p = () => ha.devices[DEVICE_ID].properties
 
-        thinq.onData(DRAWER_OPEN)
-        assert.deepEqual(applianceProperties(p()), { drawer: 'ON' })
-        thinq.onData(DRAWER_SHUT)
-        assert.equal(p().drawer, 'OFF')
-        thinq.onData(DRAWER_RESENT)
-        assert.equal(p().drawer, 'OFF')
+        for (const frame of [DRAWER_OPEN, DRAWER_SHUT, DRAWER_RESENT]) thinq.onData(frame)
+        assert.deepEqual(applianceProperties(p()), {})
+        thinq.onData(EB_IDLE)
+        const drawer = p().drawer
+        assert.equal(drawer, 'OFF')
+        for (const frame of [DRAWER_OPEN, DRAWER_SHUT, DRAWER_RESENT]) thinq.onData(frame)
+        assert.equal(p().drawer, drawer)
     })
 
     test('only matched accepted properties publish immediately; unsolicited replies do not', () => {
