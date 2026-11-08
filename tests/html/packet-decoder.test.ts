@@ -142,6 +142,27 @@ test('receipt and delivery ACKs retain independent meanings', () => {
     assert.equal(decodePacket(short([0xf0, 0, 0xc3, 4])).valid, true)
 })
 
+test('washer and dryer envelope receipts include the acknowledged sequence', () => {
+    for (const [model, classByte, sequence] of [
+        [washer, 0x20, 0xa754],
+        [dryer, 0x30, 0x18a0],
+        [dryer, 0x30, 0x0c97],
+    ] as const) {
+        const frame = short([classByte, 0, 0x0b, 0, sequence >> 8, sequence & 255])
+        const decoded = decodePacket(frame, { model })
+        assert.equal(decoded.valid, true)
+        assert.equal(decoded.summary, 'Receipt ACK')
+        assert.equal(decoded.fields.find((f: any) => f.key === 'ackType').value, 0x0b)
+        assert.equal(decoded.fields.find((f: any) => f.key === 'result').value, 0)
+        assert.equal(decoded.fields.find((f: any) => f.key === 'sequence').value, sequence)
+        frame[frame.length - 2] ^= 1
+        assert.equal(decodePacket(frame, { model: dryer }).valid, false)
+    }
+    assert.equal(decodePacket(short([0x30, 0, 0x66, 0]), { model: dryer }).valid, true)
+    for (const tail of [[0x18], [0x18, 0xa0, 0]])
+        assert.equal(decodePacket(short([0x30, 0, 0x0b, 0, ...tail]), { model: dryer }).valid, false)
+})
+
 test('washer EC validates both markers; dryer records do not require a zero marker', () => {
     const previous = Array(51).fill(0),
         current = Array(51).fill(0)
