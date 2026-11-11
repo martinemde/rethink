@@ -84,6 +84,7 @@ const PROP_CYCLE_OPTIMIZATION = 0x4c
 const PROP_MELODY = 0x50
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_QUICK_LOAD_SENSE = 0x56
+const PROP_KEEP_FRESH = 0x57
 const PROP_CURRENT_TIME_DISPLAY = 0x58 // modelJSON currentTimeDisplay
 
 const COURSE_DOWNLOADED = 0xff
@@ -172,6 +173,9 @@ const MELODY_OFFSET = 45
 const SPLASH_SCREEN_OFFSET = 46
 const SOFTENER_TANK_USE_OFFSET = 48
 
+const KEEP_FRESH_OFFSET = 47
+const KEEP_FRESH_MASK = 0x08
+
 const NOZZLE_CLEAN_OFFSET = 47
 const NOZZLE_CLEAN_MASK = 0x60
 // The standby screen's clock, shown while the washer is off. The clock is a ThinQ UP feature (content WM-8 in
@@ -206,6 +210,8 @@ const OPT6_OFFSET = 40
 // f0 24 10 01 <1|0>; the cloud sends 0 at every cycle start and in answer to the washer's 7f 03 after a
 // reconnect, overriding a setting from HA. While set, a cycle ends in End remote maintain on and the washer
 // stays on, instead of reporting End and powering itself off ~17 s later.
+// This setting is also reported in Standby, during a cycle and after Pause powers off KeepFresh;
+// it is neither the Remote Start operation bit at rec[37] nor the post-cycle state 42.
 const OPT6_REMOTE_MAINTAIN = 0x04
 const OPT6_CYCLE_OPTIMIZATION = 0x08
 
@@ -244,7 +250,7 @@ const STATE = Enum.of({
     'Softener input': 39,
     'Pollution detecting': 40,
     'Tub cleaning': 41,
-    'End remote maintain on': 42,
+    'Remote maintain': 42, // panel: Remote Still on
     Steam: 43,
     'Laundry care': 47,
     'EZDispense cleaning': 48,
@@ -717,12 +723,21 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:cellphone-wireless',
                         entity_category: 'diagnostic',
                     },
+                    keep_fresh: {
+                        platform: 'switch',
+                        device_class: 'switch',
+                        unique_id: '$deviceid-keep_fresh',
+                        state_topic: '$this/keep_fresh',
+                        command_topic: '$this/keep_fresh/set',
+                        name: 'KeepFresh',
+                        icon: 'mdi:refresh',
+                    },
                     remote_maintain: {
                         platform: 'switch',
                         unique_id: '$deviceid-remote_maintain',
                         state_topic: '$this/remote_maintain',
                         command_topic: '$this/remote_maintain/set',
-                        name: 'Keep Remote Start On',
+                        name: 'Keep Remote Start',
                         icon: 'mdi:cellphone-wireless',
                         entity_category: 'config',
                     },
@@ -866,6 +881,8 @@ export default class Device extends AABBDevice {
                       ? PROP_CURRENT_TIME_DISPLAY
                       : PROP_CYCLE_OPTIMIZATION
             this.writeProps(p, value === 'ON' ? 1 : 0)
+        } else if (prop === 'keep_fresh') {
+            if (value === 'ON' || value === 'OFF') this.writeProps(PROP_KEEP_FRESH, value === 'ON' ? 1 : 0)
         } else if (prop === 'remote_maintain') {
             if (value === 'ON' || value === 'OFF') this.writeCommand(COMMAND_REMOTE_MAINTAIN, value === 'ON' ? 1 : 0)
         } else if (prop === 'melody') {
@@ -990,6 +1007,8 @@ export default class Device extends AABBDevice {
         this.publishProperty('remote_maintain', (rec[OPT6_OFFSET] & OPT6_REMOTE_MAINTAIN) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('door_lock', onOff((rec[DOOR_LOCK_OFFSET] & DOOR_LOCK_MASK) !== 0))
         this.publishProperty('remote_start', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_START) !== 0))
+        // Active KeepFresh, separate from the Fresh Care cycle option at rec[36].
+        this.publishProperty('keep_fresh', onOff((rec[KEEP_FRESH_OFFSET] & KEEP_FRESH_MASK) !== 0))
         this.publishProperty('drawer', onOff((rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) === 0))
         this.publishProperty('quick_load_sense', onOff((rec[OPT7_OFFSET] & OPT7_QUICK_LOAD_SENSE) !== 0))
         this.publishProperty('melody', ENDING_MELODY.map(rec[MELODY_OFFSET]))

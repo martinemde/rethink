@@ -1030,6 +1030,7 @@ describe('FAFXU22007', () => {
             child_lock: 'OFF',
             cycle_optimization: 'ON',
             remote_maintain: 'OFF',
+            keep_fresh: 'OFF',
             door_lock: 'OFF',
             remote_start: 'OFF',
             drawer: 'OFF',
@@ -1683,9 +1684,9 @@ const REMOTE_MAINTAIN_REPLY = buf('aa0820002400a3bb')
 const REMOTE_MAINTAIN_REFUSED = buf('aa0820002403acbb')
 
 describe('FAFXU22007 remote maintain', () => {
-    test('the flag is rec[40] 0x04, and a cycle ends in End remote maintain on while it is set', () => {
+    test('the setting is rec[40] 0x04, and the cycle ends in Remote maintain', () => {
         const p = feed([END_REMOTE_MAINTAIN])
-        assert.equal(p.status, 'End remote maintain on')
+        assert.equal(p.status, 'Remote maintain')
         assert.equal(p.remote_maintain, 'ON')
         assert.equal(p.cycle_optimization, 'ON')
         assert.equal(feed([EC_ON]).remote_maintain, 'OFF')
@@ -1751,6 +1752,175 @@ describe('FAFXU22007 remote maintain', () => {
         assert.equal(ha.devices[DEVICE_ID].properties.problem, undefined)
         thinq.emit('data', REMOTE_MAINTAIN_REFUSED)
         assert.equal(ha.devices[DEVICE_ID].properties.problem_reason, 'Command refused (0x03)')
+    })
+})
+
+// Captured WM6700HBA sequence: Keep Remote Start enabled in Standby, Spin Only,
+// remote-maintain End, Activate KeepFresh, then panel Pause and door unlock.
+// The user observed KeepFresh on the panel; replay below only validates decoding.
+const KEEP_REMOTE_STANDBY = buf(
+    'aaff200a0078001354000100ec00660005100e0e0d00000000000000004800480000000d010004070000021d020200301e00000000000838000000000108640100040005100e0e0d00000000000000004800480000000d010004070000021d020200301e0000000000083c00000000010864010004ed7ebb',
+)
+const KEEP_REMOTE_DRAWER_CLOSED = buf(
+    'aaff200a007800135c000100ec00660005100e0e0d00000000000000004800480000000d010004070000021d020200301e0000000000083c000000000108640100040005100e0e0d00000000000000004800480000000d010004070000021d020200301e00000000000c3c00000000010864010004af70bb',
+)
+const KEEP_REMOTE_SPINNING = buf(
+    'aaff200a00780013c0000100ec00660000000e0d4e000000000000000008000b0002004e0e0114070000001d020200301e00000010010c3c000000000108640100040000000e0d4e000000000000000007000b0003004e0e0114070000001d020200301e00000010010c3c000000000108640100040668bb',
+)
+const KEEP_REMOTE_END = buf(
+    'aaff200a0078001436000100ec00660000000e0d4e000000000000000001000b0010004e0e0114070000001d020200301e00000010010c3c000000000108640100040000000e004e000000000000000001000b0013004e2a0e14070000001d020200301e00000010010c3c00000000010864010004adb3bb',
+)
+const KEEP_FRESH_ACTIVE = buf(
+    'aaff200a0078001452000100ec00660000000e004e000000000000000001000b0013004e2a0e14070000001d020200301e00000010010c3c000000000108640100040000000e004e000000000000000001000b0013004e2f2a14070000001d020200301e00000010010c3c0000000001086c010004a206bb',
+)
+const KEEP_FRESH_STOPPED = buf(
+    'aaff200a0078001470000100ec00660000000e004e000000000000000001000b0013004e2f2a14070000001d020200301e00000010010c3c0000000001086c0100040000000e004e00000000000000000100000013004e002f14000000001d020200301e00000000010c3c00000000010864010004a076bb',
+)
+const KEEP_FRESH_UNLOCKED = buf(
+    'aaff200a0078001472000100ec00660000000e004e00000000000000000100000013004e002f14000000001d020200301e00000000010c3c000000000108640100040000000e004e00000000000000000100000013004e002f14000000001d020200301e00000000000c3c00000000010864010004100bbb',
+)
+// After the app sent Keep Remote Start OFF and the user powered on; not an isolated bit transition.
+const KEEP_REMOTE_DISABLED_OFF = buf(
+    'aaff200a00780014b9000100ec00660000000e004e00000000000000000100000014004e002f14000000001d020200301e00000000000c3c000000000108640100040000000e0000000000000000000000000000000000002f000000000000000200301e00000000000c3000000000000064010000e0f6bb',
+)
+const KEEP_REMOTE_DISABLED_POWER_ON = buf(
+    'aaff200a00780014be000100ec00660000000e0000000000000000000000000000000000002f000000000000000200301e00000000000c30000000000000640100000005100e0e0d00000000000000004800480000000d0100040700000200020200301e00000000000c380000000001086401000087b4bb',
+)
+const KEEP_REMOTE_DISABLED_STANDBY = buf(
+    'aaff200a00780014c1000100ec00660005100e0e0d00000000000000004800480000000d0100040700000200020200301e00000000000c38000000000108640100000005100e0e0d00000000000000004800480000000d010004070000021d020200301e00000000000c38000000000108640100044dabbb',
+)
+// Panel Remote Start enabled with Keep Remote Start disabled; door lock follows separately.
+const PANEL_REMOTE_START_ARMED = buf(
+    'aaff200a00780014cf000100ec00660005100e0e0d00000000000000004800480000000d010004070000021d020200301e00000000000c38000000000108640100040005100e0e0d00000000000000004800480000000d010004070000021d020200301e00000010000c3800000000010864010004ea6ebb',
+)
+const PANEL_REMOTE_START_LOCKED = buf(
+    'aaff200a00780014d1000100ec00660005100e0e0d00000000000000004800480000000d010004070000021d020200301e00000010000c38000000000108640100040005100e0e0d00000000000000004800480000000d010004070000021d020200301e00000010010c3800000000010864010004a509bb',
+)
+const ACTIVATE_KEEP_FRESH = 'AA0DF0E5000201FF015701B2BB'
+const KEEP_FRESH_REPLY = buf(
+    'aa4020e6000201ff0157000000000e004e000000000000000001000b0013004e2f2a14070000001d020200301e00000010010c3c0000000001086c0100049cbb',
+)
+
+// App KeepFresh ON/OFF while paused: each current report changes only record47 mask08.
+const KEEP_FRESH_PAUSED_ON = buf(
+    'aaff200a0078001866000100ec00660005100e0e0d00000000000000004800480000000d020104070000021d020200301e00000010010c38000000000108640100040005100e0e0d00000000000000004800480000000d020104070000021d020200301e00000010010c380000000001086c0100042631bb',
+)
+const KEEP_FRESH_PAUSED_OFF = buf(
+    'aaff200a007800186d000100ec00660005100e0e0d00000000000000004800480000000d020104070000021d020200301e00000010010c380000000001086c0100040005100e0e0d00000000000000004800480000000d020104070000021d020200301e00000010010c3800000000010864010004bad7bb',
+)
+const DEACTIVATE_KEEP_FRESH = 'AA0DF0E5000201FF015700B3BB'
+const KEEP_FRESH_PAUSED_ON_REPLY = buf(
+    'aa4020e6000201ff0157000005100e0e0d00000000000000004800480000000d020104070000021d020200301e00000010010c380000000001086c01000426bb',
+)
+const KEEP_FRESH_PAUSED_OFF_REPLY = buf(
+    'aa4020e6000201ff0157000005100e0e0d00000000000000004800480000000d020104070000021d020200301e00000010010c38000000000108640100043ebb',
+)
+
+describe('FAFXU22007 KeepFresh and independent remote states', () => {
+    test('Keep Remote Start persists independently of operation, End, KeepFresh and unlock', () => {
+        const { ha, thinq } = makeDevice()
+        for (const [frame, status, remote, keepFresh, locked] of [
+            [KEEP_REMOTE_STANDBY, 'Initial', 'OFF', 'OFF', 'OFF'],
+            [KEEP_REMOTE_DRAWER_CLOSED, 'Initial', 'OFF', 'OFF', 'OFF'],
+            [KEEP_REMOTE_SPINNING, 'Spinning', 'ON', 'OFF', 'ON'],
+            [KEEP_REMOTE_END, 'Remote maintain', 'ON', 'OFF', 'ON'],
+            [KEEP_FRESH_ACTIVE, 'Laundry care', 'ON', 'ON', 'ON'],
+            [KEEP_FRESH_STOPPED, 'Off', 'OFF', 'OFF', 'ON'],
+            [KEEP_FRESH_UNLOCKED, 'Off', 'OFF', 'OFF', 'OFF'],
+        ] as const) {
+            thinq.emit('data', frame)
+            const p = ha.devices[DEVICE_ID].properties
+            assert.equal(p.status, status)
+            assert.equal(p.remote_maintain, 'ON')
+            assert.equal(p.remote_start, remote)
+            assert.equal(p.keep_fresh, keepFresh)
+            assert.equal(p.door_lock, locked)
+            assert.equal(p.current_time_display, 'OFF')
+            assert.equal(p.fresh_care, 'OFF')
+        }
+        assert.deepEqual(thinq.outbox, [])
+    })
+
+    test('activation sends the captured property write and waits for reported state', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', KEEP_REMOTE_END)
+        dev.setProperty('keep_fresh', 'ON')
+        assert.deepEqual(thinq.outbox.map(hex), [ACTIVATE_KEEP_FRESH])
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, 'OFF')
+        dev.setProperty('buzzer', 'Off')
+        assert.equal(thinq.outbox.length, 1)
+        thinq.emit('data', KEEP_FRESH_REPLY)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'Laundry care')
+        assert.equal(thinq.outbox.length, 2)
+    })
+
+    test('KeepFresh switch sends captured ON/OFF commands and reads isolated Pause reports', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', KEEP_FRESH_PAUSED_OFF)
+        for (const [value, command, reply, report] of [
+            ['ON', ACTIVATE_KEEP_FRESH, KEEP_FRESH_PAUSED_ON_REPLY, KEEP_FRESH_PAUSED_ON],
+            ['OFF', DEACTIVATE_KEEP_FRESH, KEEP_FRESH_PAUSED_OFF_REPLY, KEEP_FRESH_PAUSED_OFF],
+        ] as const) {
+            const previous = ha.devices[DEVICE_ID].properties.keep_fresh
+            thinq.resetRecorder()
+            dev.setProperty('keep_fresh', value)
+            assert.deepEqual(thinq.outbox.map(hex), [command])
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, previous)
+            thinq.emit('data', reply)
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_fresh, value)
+            thinq.emit('data', report)
+            const p = ha.devices[DEVICE_ID].properties
+            assert.equal(p.keep_fresh, value)
+            assert.equal(p.status, 'Pause')
+            assert.equal(p.remote_maintain, 'OFF')
+        }
+    })
+
+    test('invalid KeepFresh values and the superseded button do not send commands', () => {
+        const { thinq, dev } = makeDevice()
+        for (const value of ['', 'TOGGLE', '0', '1']) dev.setProperty('keep_fresh', value)
+        dev.setProperty('activate_keep_fresh', '')
+        assert.deepEqual(thinq.outbox, [])
+    })
+
+    test('panel Remote Start arming and door lock are separate reports with Keep Remote Start disabled', () => {
+        const { ha, thinq } = makeDevice()
+        for (const [frame, remote, lock] of [
+            [KEEP_REMOTE_DISABLED_STANDBY, 'OFF', 'OFF'],
+            [PANEL_REMOTE_START_ARMED, 'ON', 'OFF'],
+            [PANEL_REMOTE_START_LOCKED, 'ON', 'ON'],
+        ] as const) {
+            thinq.emit('data', frame)
+            const p = ha.devices[DEVICE_ID].properties
+            assert.equal(p.status, 'Initial')
+            assert.equal(p.remote_maintain, 'OFF')
+            assert.equal(p.remote_start, remote)
+            assert.equal(p.door_lock, lock)
+            assert.equal(p.keep_fresh, 'OFF')
+        }
+        assert.deepEqual(thinq.outbox, [])
+    })
+
+    test('subsequent power-on reports the disabled setting without inferring state from its ACK', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', KEEP_FRESH_UNLOCKED)
+        dev.setProperty('remote_maintain', 'OFF')
+        assert.deepEqual(thinq.outbox.map(hex), [CLOUD_REMOTE_MAINTAIN_OFF])
+        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, 'ON')
+        for (const [frame, status] of [
+            [KEEP_REMOTE_DISABLED_OFF, 'Off'],
+            [KEEP_REMOTE_DISABLED_POWER_ON, 'Initial'],
+            [KEEP_REMOTE_DISABLED_STANDBY, 'Initial'],
+        ] as const) {
+            thinq.emit('data', frame)
+            const p = ha.devices[DEVICE_ID].properties
+            assert.equal(p.remote_maintain, 'OFF')
+            assert.equal(p.remote_start, 'OFF')
+            assert.equal(p.keep_fresh, 'OFF')
+            assert.equal(p.status, status)
+        }
     })
 })
 
