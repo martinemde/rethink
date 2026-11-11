@@ -150,9 +150,23 @@ export default class Device extends AABBDevice {
                         unique_id: '$deviceid-keep_remote_start',
                         state_topic: '$this/keep_remote_start',
                         command_topic: '$this/keep_remote_start/set',
-                        name: 'Keep Remote Start On',
+                        name: 'Keep Remote Start',
                         icon: 'mdi:remote',
                         entity_category: 'config',
+                    },
+                    remote_start: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-remote_start',
+                        state_topic: '$this/remote_start',
+                        name: 'Remote start',
+                        icon: 'mdi:play-circle-outline',
+                    },
+                    door_lock: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-door_lock',
+                        state_topic: '$this/door_lock',
+                        name: 'Door lock',
+                        icon: 'mdi:lock',
                     },
                     problem: {
                         platform: 'binary_sensor',
@@ -339,6 +353,8 @@ export default class Device extends AABBDevice {
             this.publishProperty('buzzer', BUZZER[rec[29]])
             this.publishProperty('warm_water', rec[36] & 0x08 ? 'ON' : 'OFF')
             this.publishProperty('keep_remote_start', rec[40] & 0x04 ? 'ON' : 'OFF')
+            this.publishProperty('remote_start', rec[37] & 0x10 ? 'ON' : 'OFF')
+            this.publishProperty('door_lock', rec[38] & 0x01 ? 'ON' : 'OFF')
             this.publishProperty('melody', Object.entries(MELODIES).find(([, code]) => code === rec[45])?.[0])
             if ([0, 1].includes(update.state_code)) this.completionState = 'unarmed'
             else if ([11, 12, 14].includes(update.state_code)) this.completionState = 'armed'
