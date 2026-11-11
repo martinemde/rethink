@@ -981,6 +981,17 @@ function completionNotification(length = 121, prefix = [8, 11, 1, 11, 8], counte
     return frame
 }
 
+// WM6700HBA, 2026-11-11: panel Remote Start with the door open displayed
+// "Door open" / "Open and close the door again". Dismissing it with the check mark,
+// without moving the door, reversed only rec[19,21,22]: [0x14,1,2] -> [0,2,1].
+// Identity-free status frames only; byte 19 is not a proven generic error enum.
+const DOOR_OPEN_ALERT = buf(
+    'aaff200a0078001838000100ec00660005100e0e0d00000000000000004800480000000d020104070000021d020200301e00000000000c38000000000108640100040005100e0e0d00000000000000004800480000140d010204070000021d020200301e00000000000c38000000000108640100048b1bbb',
+)
+const DOOR_OPEN_ALERT_DISMISSED = buf(
+    'aaff200a007800183c000100ec00660005100e0e0d00000000000000004800480000140d010204070000021d020200301e00000000000c38000000000108640100040005100e0e0d00000000000000004800480000000d020104070000021d020200301e00000000000c38000000000108640100042047bb',
+)
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -1002,6 +1013,7 @@ function walk(prop: string, cases: [Buffer, string | number][]) {
 describe('FAFXU22007', () => {
     test('the connect snapshot decodes every status-record field', () => {
         assert.deepEqual(feed([EB_IDLE]), {
+            door_open_alert: 'OFF',
             power: 'ON',
             status: 'Initial',
             course: 'Normal',
@@ -1327,6 +1339,52 @@ describe('FAFXU22007', () => {
         assert.equal(p().door, 'ON')
         thinq.emit('data', DOOR_SHUT)
         assert.equal(p().door, 'OFF')
+    })
+
+    test('Door open alert triggers, dismisses and retriggers without changing the door', () => {
+        const { ha, thinq, dev } = makeDevice()
+        const alert = ha.devices[DEVICE_ID].config!.components.door_open_alert as Record<string, unknown>
+        assert.equal(alert.platform, 'binary_sensor')
+        assert.equal(alert.device_class, 'problem')
+        assert.equal(alert.command_topic, undefined)
+        assert.equal(ha.devices[DEVICE_ID]?.properties.door_open_alert, undefined)
+        thinq.emit('data', DOOR_OPEN)
+        for (const [frame, alert] of [
+            [DOOR_OPEN_ALERT, 'ON'],
+            [DOOR_OPEN_ALERT_DISMISSED, 'OFF'],
+            [DOOR_OPEN_ALERT, 'ON'],
+        ] as const) {
+            thinq.emit('data', frame)
+            const p = ha.devices[DEVICE_ID].properties
+            assert.equal(p.door_open_alert, alert)
+            assert.equal(p.door, 'ON')
+        }
+        dev.setProperty('door_open_alert', 'OFF')
+        assert.deepEqual(thinq.outbox, [])
+        assert.deepEqual(
+            thinq.sent.filter((message) => message.cmd !== 'ack'),
+            [],
+        )
+    })
+
+    test('Door open alert requires the whole observed tuple in the current record', () => {
+        // Synthetic EB snapshots made from the captured current record, not new physical evidence.
+        for (const [code, state, context, expected] of [
+            [0x14, 1, 2, 'ON'],
+            [0x15, 1, 2, 'OFF'],
+            [0x14, 2, 2, 'OFF'],
+            [0x14, 1, 1, 'OFF'],
+        ] as const) {
+            const frame = Buffer.from(EB_IDLE)
+            DOOR_OPEN_ALERT.copy(frame, 15, 66, 117)
+            frame[15 + 19] = code
+            frame[15 + 21] = state
+            frame[15 + 22] = context
+            frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
+            assert.equal(feed([frame]).door_open_alert, expected)
+        }
+        // The captured clear has the alert tuple only in its previous half.
+        assert.equal(feed([DOOR_OPEN_ALERT_DISMISSED]).door_open_alert, 'OFF')
     })
 
     test('the d8 frame does not move the drawer', () => {

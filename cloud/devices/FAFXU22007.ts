@@ -159,6 +159,13 @@ const REMAIN_TIME_OFFSET = 13 // minutes
 const INITIAL_TIME_OFFSET = 15 // minutes
 const SPENT_POWER_OFFSET = 17 // Wh, cleared at power-on
 const LOADED_COURSE_OFFSET = 20 // = rec[5], except where rec[5] is 0xff (a downloaded course)
+// Preliminary Door open alert signature: these three fields changed together on panel
+// Remote Start and reversed on dismissal without door motion. Not a generic error enum.
+const DOOR_OPEN_ALERT_OFFSET = 19
+const DOOR_OPEN_ALERT_VALUE = 0x14
+const DOOR_OPEN_ALERT_STATE = 1
+const DOOR_OPEN_ALERT_CONTEXT_OFFSET = 22
+const DOOR_OPEN_ALERT_CONTEXT = 2
 const STATE_OFFSET = 21
 const TUB_CLEAN_COUNT_OFFSET = 28
 const BUZZER_OFFSET = 29
@@ -485,6 +492,14 @@ export default class Device extends AABBDevice {
                         state_topic: '$this/door',
                         name: 'Door',
                         device_class: 'door',
+                    },
+                    door_open_alert: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-door_open_alert',
+                        state_topic: '$this/door_open_alert',
+                        name: 'Door open alert',
+                        device_class: 'problem',
+                        icon: 'mdi:door-open',
                     },
                     drawer: {
                         platform: 'binary_sensor',
@@ -958,6 +973,15 @@ export default class Device extends AABBDevice {
         this.bundle.set('fresh_care', bit(rec[OPT3_OFFSET], OPT3_FRESH_CARE))
         this.bundle.set('reserve_time', rec.readUInt16BE(RESERVE_TIME_OFFSET))
 
+        // OFF means this observed alert signature is absent, not that the door is closed or all errors cleared.
+        this.publishProperty(
+            'door_open_alert',
+            onOff(
+                rec[DOOR_OPEN_ALERT_OFFSET] === DOOR_OPEN_ALERT_VALUE &&
+                    state === DOOR_OPEN_ALERT_STATE &&
+                    rec[DOOR_OPEN_ALERT_CONTEXT_OFFSET] === DOOR_OPEN_ALERT_CONTEXT,
+            ),
+        )
         this.publishProperty('power', isOff ? 'OFF' : 'ON')
         this.publishProperty('status', STATE.map(state))
         this.publishProperty('course', COURSE.map(course === COURSE_DOWNLOADED ? rec[LOADED_COURSE_OFFSET] : course))
