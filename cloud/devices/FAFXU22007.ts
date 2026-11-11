@@ -80,6 +80,7 @@ const PROP_CYCLE_OPTIMIZATION = 0x4c
 const PROP_MELODY = 0x50
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_QUICK_LOAD_SENSE = 0x56
+const PROP_KEEP_FRESH = 0x57
 const PROP_CLOCK_DISPLAY = 0x58
 const PROP_TIME_FORMAT = 0x59
 const PROP_DATE_DISPLAY = 0x5a
@@ -164,6 +165,9 @@ const MELODY_OFFSET = 45
 const SPLASH_SCREEN_OFFSET = 46
 const SOFTENER_TANK_USE_OFFSET = 48
 
+const KEEP_FRESH_OFFSET = 47
+const KEEP_FRESH_MASK = 0x08
+
 const NOZZLE_CLEAN_OFFSET = 47
 const NOZZLE_CLEAN_MASK = 0x60
 const CLOCK_DISPLAY_OFFSET = 47
@@ -197,9 +201,11 @@ const OPT5_LOW_DETERGENT = 0x02
 const OPT5_DRAWER_CLOSED = 0x04
 
 const OPT6_OFFSET = 40
-// Keep Remote Start On (remoteMaintain): set and cleared with f0 24 10 01 <1|0>.
+// Keep Remote Start (remoteMaintain): set and cleared with f0 24 10 01 <1|0>.
 // The cloud sends 0 at cycle start and after reconnect, overriding a setting from HA.
-// While set, a cycle ends in End remote maintain on instead of powering off ~17 s later.
+// While set, a cycle ends in Remote maintain instead of powering off ~17 s later.
+// The setting persists through Standby, a cycle and Off after Pause stops KeepFresh;
+// it is separate from the Remote Start operation bit at rec[37] and post-cycle state42.
 const OPT6_REMOTE_MAINTAIN = 0x04
 const OPT6_CYCLE_OPTIMIZATION = 0x08
 
@@ -239,7 +245,7 @@ const STATE = Enum.of({
     'Softener input': 39,
     'Pollution detecting': 40,
     'Tub Cleaning': 41,
-    'End remote maintain on': 42,
+    'Remote maintain': 42, // panel: Remote Still on
     Steam: 43,
     'Laundry care': 47,
     'EZDispense cleaning': 48,
@@ -894,13 +900,28 @@ export default class Device extends AABBDevice {
                         payload_off: 'ON',
                         entity_category: 'diagnostic',
                     },
+                    activate_keep_fresh: {
+                        platform: 'button',
+                        unique_id: '$deviceid-activate_keep_fresh',
+                        command_topic: '$this/activate_keep_fresh/set',
+                        payload_press: '',
+                        name: 'Activate KeepFresh',
+                        icon: 'mdi:refresh',
+                    },
+                    keep_fresh: {
+                        platform: 'binary_sensor',
+                        unique_id: '$deviceid-keep_fresh',
+                        state_topic: '$this/keep_fresh',
+                        name: 'KeepFresh',
+                        icon: 'mdi:refresh',
+                    },
                     remote_maintain: {
                         platform: 'switch',
                         device_class: 'switch',
                         unique_id: '$deviceid-remote_maintain',
                         state_topic: '$this/remote_maintain',
                         command_topic: '$this/remote_maintain/set',
-                        name: 'Keep Remote Start On',
+                        name: 'Keep Remote Start',
                         icon: 'mdi:remote',
                         entity_category: 'config',
                     },
@@ -1198,6 +1219,9 @@ export default class Device extends AABBDevice {
                       ? PROP_QUICK_LOAD_SENSE
                       : PROP_CYCLE_OPTIMIZATION
             this.writeProps(p, value === 'ON' ? 1 : 0)
+        } else if (prop === 'activate_keep_fresh') {
+            // Only activation is captured; stopping uses the appliance's Pause or Power control.
+            if (value === '') this.writeProps(PROP_KEEP_FRESH, 1)
         } else if (prop === 'remote_maintain') {
             if (value === 'ON' || value === 'OFF') this.writeCommand(COMMAND_REMOTE_MAINTAIN, value === 'ON' ? 1 : 0)
         } else if (prop === 'time_format') {
@@ -1489,6 +1513,8 @@ export default class Device extends AABBDevice {
         )
         this.publishProperty('door_lock', (rec[DOOR_LOCK_OFFSET] & DOOR_LOCK_MASK) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('remote_start', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_START) !== 0))
+        // Active KeepFresh, separate from the Fresh Care cycle option at rec[36].
+        this.publishProperty('keep_fresh', onOff((rec[KEEP_FRESH_OFFSET] & KEEP_FRESH_MASK) !== 0))
         this.publishProperty('low_softener', (rec[OPT5_OFFSET] & OPT5_LOW_SOFTENER) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('low_detergent', (rec[OPT5_OFFSET] & OPT5_LOW_DETERGENT) !== 0 ? 'ON' : 'OFF')
         this.publishProperty('drawer', (rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) !== 0 ? 'OFF' : 'ON')
