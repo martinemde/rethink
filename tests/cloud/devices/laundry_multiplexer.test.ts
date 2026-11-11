@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import AABBDevice from '@/cloud/devices/aabb_device'
 import { LaundryMultiplexer, type LaundryStream } from '@/cloud/devices/laundry_multiplexer'
-import { Device } from '@/cloud/thinq2/device'
+import { txPacket, txAck, fromRxPacket } from '@/cloud/thinq2/clip'
 import crc16 from '@/util/crc16'
 import { buf } from '@/tests/helpers/mocks'
 import { MockLaundryDevice } from '@/tests/helpers/laundry'
@@ -54,22 +54,39 @@ function longFrame(change: (packet: Buffer) => void) {
 }
 
 describe('laundry shared multiplexer', () => {
+    test('native non-device packet payloads fan out unchanged without releasing a laundry write', () => {
+        const { dev, ha, bridge } = setup()
+        bridge.send(txPacket(CHIME))
+        ha.queueWrite(() => COMMAND.subarray(2, -2))
+        const payload = Object.freeze({ cmd: 'custom_response', type: 7, data: { status: 'ready' } })
+        const received: unknown[] = []
+        ha.on('packet', (packet) => received.push(packet))
+        bridge.on('packet', (packet) => received.push(packet))
+        dev.onPacket(payload)
+        assert.equal(received.length, 2)
+        assert.ok(received.every((packet) => packet === payload))
+        assert.deepEqual(dev.outbox, [CHIME])
+        dev.inject(W_REPLY)
+        assert.deepEqual(dev.outbox, [CHIME, COMMAND])
+        dev.emit('close')
+    })
+
     test('bridge writes, HA builders and commands share FIFO; all delivery precedes the next build', () => {
         const { dev, mux, ha, bridge } = setup()
-        const body = Object.freeze({ ...Device.packet(CHIME), extra: 'bridge metadata' })
+        const body = Object.freeze({ ...txPacket(CHIME), extra: 'bridge metadata' })
         const sent: object[] = []
-        dev.on('sendRawData', (message) => sent.push(message))
+        dev.on('sendRawPacket', (message) => sent.push(message))
         let seen = 0
         let callback = 0
-        ha.on('data', () => {
+        ha.on('packet', () => {
             const answered = mux.writeAnswered(0xe5)
             assert.equal(answered?.stream, bridge)
             assert.deepEqual(answered?.inner, CHIME.subarray(2, -2))
             seen++
         })
-        bridge.on('data', () => seen++)
+        bridge.on('packet', () => seen++)
         bridge.send(body, (reply) => {
-            assert.equal(reply, W_REPLY)
+            assert.deepEqual(reply, W_REPLY)
             callback++
         })
         ha.queueWrite(() => {
@@ -77,13 +94,16 @@ describe('laundry shared multiplexer', () => {
             assert.equal(callback, 1)
             return COMMAND.subarray(2, -2)
         })
-        bridge.send(Device.packet(CHIME))
+        bridge.send(txPacket(CHIME))
         assert.equal(dev.outbox.length, 1)
         dev.inject(W_REPLY)
-        assert.equal(sent[0], body)
+        const { did, mid, ...forwarded } = sent[0] as typeof body & { did: string; mid: number }
+        assert.equal(did, dev.id)
+        assert.equal(typeof mid, 'number')
+        assert.deepEqual(forwarded, body)
         assert.deepEqual(dev.outbox, [CHIME, COMMAND])
         assert.equal(mux.writeAnswered(0xe5), undefined)
-        ha.removeAllListeners('data')
+        ha.removeAllListeners('packet')
         dev.inject(COMMAND_REPLY)
         assert.deepEqual(dev.outbox, [CHIME, COMMAND, CHIME])
         dev.emit('close')
@@ -91,7 +111,7 @@ describe('laundry shared multiplexer', () => {
 
     test('synthetic cancellation builder does not send or obstruct the next write', () => {
         const { dev, ha, bridge } = setup()
-        bridge.send(Device.packet(CHIME))
+        bridge.send(txPacket(CHIME))
         ha.queueWrite(() => undefined)
         ha.queueWrite(() => CHIME.subarray(2, -2))
         dev.inject(W_REPLY)
@@ -101,14 +121,14 @@ describe('laundry shared multiplexer', () => {
 
     test('synthetic malformed, wrong-class, wrong-property/count and unrelated frames never release E5', () => {
         const { dev, ha, bridge } = setup()
-        bridge.send(Device.packet(CHIME))
+        bridge.send(txPacket(CHIME))
         ha.queueWrite(() => COMMAND.subarray(2, -2))
         const badChecksum = Buffer.from(W_REPLY)
         badChecksum[badChecksum.length - 2] ^= 1
         const badLength = Buffer.from(W_REPLY)
         badLength[1]--
         const got: Buffer[] = []
-        ha.on('data', (packet) => got.push(packet))
+        ha.on('packet', (packet) => got.push(fromRxPacket(packet)!))
         const invalid = [
             badChecksum,
             badLength,
@@ -139,8 +159,8 @@ describe('laundry shared multiplexer', () => {
     test('dryer ED barrier requires a valid single-record status and updates both streams first', () => {
         const { dev, ha, bridge } = setup(0x30)
         let deliveries = 0
-        ha.on('data', () => deliveries++)
-        bridge.on('data', () => deliveries++)
+        ha.on('packet', () => deliveries++)
+        bridge.on('packet', () => deliveries++)
         ha.queueWrite(() => QUERY)
         ha.queueWrite(() => {
             assert.equal(deliveries, 8)
@@ -170,11 +190,11 @@ describe('laundry shared multiplexer', () => {
         const { dev, mux, ha, bridge } = setup()
         let cancelled = 0
         let replied = 0
-        bridge.send(Device.packet(CHIME), (reply) => {
-            assert.equal(reply, W_REPLY)
+        bridge.send(txPacket(CHIME), (reply) => {
+            assert.deepEqual(reply, W_REPLY)
             replied++
         })
-        bridge.send(Device.packet(CHIME), (reply) => {
+        bridge.send(txPacket(CHIME), (reply) => {
             assert.equal(reply, undefined)
             cancelled++
         })
@@ -182,7 +202,7 @@ describe('laundry shared multiplexer', () => {
         bridge.destroy()
         assert.equal(cancelled, 1)
         const later = dev.openStream()
-        later.on('data', () => assert.equal(mux.writeAnswered(0xe5)?.stream, bridge))
+        later.on('packet', () => assert.equal(mux.writeAnswered(0xe5)?.stream, bridge))
         dev.inject(W_REPLY)
         assert.equal(replied, 1)
         assert.deepEqual(dev.outbox, [CHIME, COMMAND])
@@ -193,7 +213,7 @@ describe('laundry shared multiplexer', () => {
         t.mock.timers.enable({ apis: ['setTimeout'] })
         const { dev, mux, ha, bridge } = setup()
         const replies: (Buffer | undefined)[] = []
-        bridge.send(Device.packet(CHIME), (r) => replies.push(r))
+        bridge.send(txPacket(CHIME), (r) => replies.push(r))
         ha.queueWrite(
             () => COMMAND.subarray(2, -2),
             (r) => replies.push(r),
@@ -201,29 +221,29 @@ describe('laundry shared multiplexer', () => {
         t.mock.timers.tick(3000)
         assert.equal(replies.length, 2)
         assert.equal(replies.filter((reply) => reply !== undefined).length, 0)
-        bridge.send(Device.packet(CHIME), (r) => replies.push(r))
+        bridge.send(txPacket(CHIME), (r) => replies.push(r))
         ha.queueWrite(() => {
             assert.fail('failed-session builder must not run')
         })
         const later = dev.openStream()
-        later.on('data', () => assert.equal(mux.writeAnswered(0xe5), undefined))
+        later.on('packet', () => assert.equal(mux.writeAnswered(0xe5), undefined))
         dev.inject(W_REPLY)
         t.mock.timers.tick(30000)
         assert.equal(dev.outbox.length, 1)
         assert.deepEqual(replies, [undefined, undefined, undefined])
         // Even replacing the mux on the same physical Device cannot create a new attribution domain.
         const replacement = new LaundryMultiplexer(dev, 0x20)
-        replacement.openStream().send(Device.packet(CHIME))
+        replacement.openStream().send(txPacket(CHIME))
         assert.equal(dev.outbox.length, 1)
         dev.emit('close')
-        assert.equal(dev.listenerCount('rawData'), 0)
+        assert.equal(dev.listenerCount('rawPacket'), 0)
         assert.equal(dev.listenerCount('close'), 0)
     })
 
     test('synthetic busy reply completes the owner then fails closed against duplicate busy replies', () => {
         const { dev, mux, ha, bridge } = setup()
         let completed = 0
-        bridge.send(Device.packet(CHIME), (r) => {
+        bridge.send(txPacket(CHIME), (r) => {
             assert.ok(r)
             completed++
         })
@@ -239,16 +259,16 @@ describe('laundry shared multiplexer', () => {
         })
         dev.inject(busy)
         assert.equal(completed, 2)
-        ha.on('data', () => assert.equal(mux.writeAnswered(0xe5), undefined))
+        ha.on('packet', () => assert.equal(mux.writeAnswered(0xe5), undefined))
         dev.inject(busy)
-        bridge.send(Device.packet(CHIME))
+        bridge.send(txPacket(CHIME))
         assert.equal(dev.outbox.length, 1)
         dev.emit('close')
     })
 
     test('synthetic skipped-builder callback reentrancy cannot dispatch two active writes', () => {
         const { dev, ha, bridge } = setup()
-        bridge.send(Device.packet(CHIME))
+        bridge.send(txPacket(CHIME))
         ha.queueWrite(
             () => undefined,
             () => ha.queueWrite(() => CHIME.subarray(2, -2)),
@@ -273,13 +293,13 @@ describe('laundry shared multiplexer', () => {
         )
         assert.equal(dev.outbox.length, 0)
         assert.equal(calls, 1)
-        assert.equal(dev.listenerCount('rawData'), 0)
+        assert.equal(dev.listenerCount('rawPacket'), 0)
     })
 
     test('synthetic streams opened during delivery do not receive the current packet', () => {
         const { dev, ha } = setup()
         let laterDeliveries = 0
-        ha.once('data', () => dev.openStream().on('data', () => laterDeliveries++))
+        ha.once('packet', () => dev.openStream().on('packet', () => laterDeliveries++))
         dev.inject(W_REPLY)
         assert.equal(laterDeliveries, 0)
         dev.inject(W_REPLY)
@@ -289,9 +309,9 @@ describe('laundry shared multiplexer', () => {
 
     test('synthetic throwing busy listener cannot reopen the gate', () => {
         const { dev, ha, bridge } = setup()
-        bridge.send(Device.packet(CHIME))
+        bridge.send(txPacket(CHIME))
         ha.queueWrite(() => CHIME.subarray(2, -2))
-        ha.once('data', () => {
+        ha.once('packet', () => {
             throw new Error('listener failed')
         })
         assert.throws(
@@ -310,11 +330,11 @@ describe('laundry shared multiplexer', () => {
 
     test('synthetic malformed tracked bridge packets cannot bypass an active transaction', () => {
         const { dev, bridge } = setup()
-        bridge.send(Device.packet(CHIME))
+        bridge.send(txPacket(CHIME))
         const malformed = Buffer.from(COMMAND)
         malformed[malformed.length - 2] ^= 1
         let rejected = 0
-        bridge.send(Device.packet(malformed), (reply) => {
+        bridge.send(txPacket(malformed), (reply) => {
             assert.equal(reply, undefined)
             rejected++
         })
@@ -327,12 +347,12 @@ describe('laundry shared multiplexer', () => {
         t.mock.timers.enable({ apis: ['setTimeout'] })
         const { dev, ha, bridge } = setup()
         let calls = 0
-        bridge.send(Device.packet(CHIME), () => calls++)
+        bridge.send(txPacket(CHIME), () => calls++)
         ha.queueWrite(
             () => COMMAND.subarray(2, -2),
             () => calls++,
         )
-        const ack = Device.ack(COMMAND)
+        const ack = txAck(COMMAND)
         bridge.send(ack)
         assert.deepEqual(
             dev.sent.filter((body) => body.cmd === 'ack'),
@@ -342,7 +362,7 @@ describe('laundry shared multiplexer', () => {
         assert.equal(calls, 2)
         t.mock.timers.tick(3000)
         assert.equal(calls, 2)
-        assert.equal(dev.listenerCount('rawData'), 0)
+        assert.equal(dev.listenerCount('rawPacket'), 0)
         assert.equal(dev.listenerCount('close'), 0)
     })
     test('model-native buzzer markers and dryer no-record E6 release the exact slot', () => {
@@ -361,7 +381,7 @@ describe('laundry shared multiplexer', () => {
 
     test('keyed coalescing keeps unrelated choices and never crosses an action barrier', () => {
         const { dev, ha, bridge } = setup()
-        bridge.send(Device.packet(CHIME))
+        bridge.send(txPacket(CHIME))
         const built: string[] = []
         const build = (name: string) => () => {
             built.push(name)

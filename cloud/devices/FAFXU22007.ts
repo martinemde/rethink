@@ -4,8 +4,9 @@ import { Device as Thinq2Device } from '../thinq2/device'
 import { type Connection } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
-import AABBDevice, { type AwaitedWrite } from './aabb_device'
+import AABBDevice, { type AwaitedWrite } from './laundry_device'
 import { LaundryMultiplexer } from './laundry_multiplexer'
+import { fromTxPacket, type ClipPayload } from '../thinq2/clip'
 import { Enum } from '@/util/enum'
 import { ENDING_MELODY } from './ending_melody'
 import crc16 from '@/util/crc16'
@@ -441,9 +442,10 @@ export default class Device extends AABBDevice {
         previousLoaded?: number
         until: number
     }
-    private readonly trackGeneration = (type: string, frame: Buffer) => {
+    private readonly trackGeneration = (packet: ClipPayload) => {
+        const frame = fromTxPacket(packet)
         if (
-            type === 'packet' &&
+            frame &&
             !this.writesBlocked &&
             frame[0] === 0xaa &&
             frame[frame.length - 1] === 0xbb &&
@@ -471,7 +473,7 @@ export default class Device extends AABBDevice {
     override drop() {
         this.acceptedPower = undefined
         this.acceptedRemoteMaintain = undefined
-        this.thinq.off('sendData', this.trackGeneration)
+        this.thinq.off('sendRawPacket', this.trackGeneration)
         this.pending.clear()
         this.pendingOwners.clear()
         this.confirmed.clear()
@@ -497,7 +499,7 @@ export default class Device extends AABBDevice {
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq, true, new LaundryMultiplexer(thinq, CLASS_BYTE))
         this.receipts = new ReceiptSupport(this)
-        thinq.on('sendData', this.trackGeneration)
+        thinq.on('sendRawPacket', this.trackGeneration)
         this.setConfig(
             allowExtendedType({
                 ...HADevice.config(meta, { name: 'LG Washer' }),

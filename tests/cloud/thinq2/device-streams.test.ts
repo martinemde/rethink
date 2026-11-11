@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Device } from '@/cloud/thinq2/device'
 import type { Broker } from '@/cloud/mqtt-broker'
-import type { DeployAppInfo } from '@/cloud/thinq2/clip'
+import { rxPacket, txPacket, txAck, type DeployAppInfo } from '@/cloud/thinq2/clip'
 
 function setup() {
     const published: object[] = []
@@ -22,36 +22,37 @@ function setup() {
     return { dev, published }
 }
 
-test('native ingress emits raw and legacy data once; stream close detaches ingress', () => {
+test('native ingress reaches streams and diagnostics once; physical close detaches streams', () => {
     const { dev } = setup()
     const stream = dev.openStream()
     const got: string[] = []
-    dev.on('rawData', () => got.push('raw'))
-    dev.on('data', () => got.push('legacy'))
-    stream.on('data', () => got.push('stream'))
-    dev.onData(Buffer.from('hello'))
-    assert.deepEqual(got, ['stream', 'raw', 'legacy'])
+    dev.on('rawPacket', () => got.push('raw'))
+    stream.on('packet', () => got.push('stream'))
+    dev.onPacket(rxPacket(Buffer.from('hello')))
+    assert.deepEqual(got, ['stream', 'raw'])
     dev.emit('close')
-    assert.equal(dev.listenerCount('rawData'), 1, 'only explicit diagnostic listener remains')
+    assert.equal(dev.listenerCount('rawPacket'), 1, 'only explicit diagnostic listener remains')
     assert.equal(dev.listenerCount('close'), 0)
+    dev.onPacket(rxPacket(Buffer.from('later')))
+    assert.deepEqual(got, ['stream', 'raw', 'raw'])
 })
 
-test('legacy send methods retain sendData while raw body metadata survives unchanged', () => {
+test('native sends preserve payload metadata and report the published envelope', () => {
     const { dev, published } = setup()
-    const diagnostics: string[] = []
     const raw: object[] = []
-    dev.on('sendData', (type, buf) => diagnostics.push(type + ':' + buf.toString('hex')))
-    dev.on('sendRawData', (body) => raw.push(body))
+    dev.on('sendRawPacket', (body) => raw.push(body))
     const packet = Buffer.from('aabb', 'hex')
-    dev.send_packet(packet)
-    dev.send_ack(packet)
+    const stream = dev.openStream()
+    stream.send(txPacket(packet))
+    stream.send(txAck(packet))
     const body = Object.freeze({ cmd: 'packet', type: 9, data: 'aAbB', extra: { original: true } })
-    dev.openStream().send(body)
-    assert.deepEqual(diagnostics, ['packet:aabb', 'ack:aabb', 'packet:aabb'])
-    assert.equal(raw[2], body)
+    stream.send(body)
+    assert.deepEqual(raw, published)
     assert.deepEqual(
         published.map(({ did, mid, ...rest }: any) => rest),
-        [Device.packet(packet), Device.ack(packet), body],
+        [txPacket(packet), txAck(packet), body],
     )
     dev.emit('close')
+    stream.send(txPacket(packet))
+    assert.equal(published.length, 3, 'closed streams cannot send')
 })

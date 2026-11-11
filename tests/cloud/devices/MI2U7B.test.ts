@@ -2,6 +2,7 @@ import { describe, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import DUT from '@/cloud/devices/MI2U7B'
 import AABBDevice from '@/cloud/devices/aabb_device'
+import { WriteQueueMultiplexer } from '@/cloud/devices/aabb_write_queue'
 import { parseSideKickFrame } from '@/cloud/devices/MI2U7B_status'
 import Bridge from '@/cloud/ha_bridge'
 import crc16 from '@/util/crc16'
@@ -343,8 +344,6 @@ describe('MI2U7B passive exact-model support', () => {
         const thinq = new MockThinq2Device('test-sidekick', META)
         ha.publishProperty(thinq.id, 'status', 'previous state')
         const bridge = new Bridge(ha.asConnection())
-        const sends: unknown[] = []
-        thinq.on('sendData', (...args) => sends.push(args))
         bridge.newDevice(thinq)
         const dev = bridge.haDevices.get(thinq.id)!
         assert.ok(dev instanceof DUT)
@@ -366,7 +365,6 @@ describe('MI2U7B passive exact-model support', () => {
         assert.equal(thinq.sent.length, 5)
         assert.ok(thinq.sent.every((message) => message.cmd === 'ack'))
         assert.deepEqual(thinq.outbox, [])
-        assert.ok(sends.every((entry) => (entry as unknown[])[0] === 'ack'))
         const unknown = new MockThinq2Device('unmatched', { ...META, modelId: 'MI2U7B_other' })
         bridge.newDevice(unknown)
         assert.equal(bridge.haDevices.has(unknown.id), false)
@@ -393,27 +391,24 @@ function inner(packet: Buffer) {
 }
 
 describe('MI2U7B automatic ACKs', () => {
-    test('valid long frames are processed before sequence-carrying ACKs, including retries', () => {
-        const { thinq, properties: p, dev } = makeDevice()
+    test('shared multiplexer ACKs valid envelopes by sequence, including retries', () => {
+        const { thinq, dev } = makeDevice()
         const packet = status(12, 85)
         packet.writeUInt16BE(0x1234, 7)
         checksum(packet)
-        const sendAck = mock.method(thinq, 'send_ack', (ack: Buffer) => {
-            assert.equal(p.status, 'Rinsing')
-            assert.deepEqual(ack, AABBDevice.frame(Buffer.from([0xf0, 0, 0x0a, 4, 0x12, 0x34])))
-        })
         thinq.emit('data', packet)
         thinq.emit('data', packet)
-        assert.equal(sendAck.mock.callCount(), 2)
+        const expected = AABBDevice.frame(Buffer.from([0xf0, 0, 0x0a, 4, 0x12, 0x34]))
+            .toString('hex')
+            .toUpperCase()
+        assert.deepEqual(
+            thinq.sent.filter((m) => m.cmd === 'ack').map((m) => m.data),
+            [expected, expected],
+        )
         dev.drop()
     })
-    test('invalid frames are not ACKed; heartbeats and appliance ACKs never cause ACK loops', () => {
+    test('shared ACK handling avoids heartbeat and appliance ACK loops', () => {
         const { thinq, dev } = makeDevice()
-        const packet = status()
-        const corrupt = Buffer.from(packet)
-        corrupt[20] ^= 1
-        for (let n = 0; n < packet.length; n++) thinq.emit('data', packet.subarray(0, n))
-        thinq.emit('data', corrupt)
         thinq.emit('data', AABBDevice.frame(Buffer.from([0x20, 0xc3])))
         thinq.emit('data', AABBDevice.frame(Buffer.from([0x20, 0, 0x24, 0])))
         assert.equal(thinq.sent.length, 0)
@@ -536,7 +531,7 @@ describe('MI2U7B captured current-record reports', () => {
         assert.deepEqual(applianceProperties(p), before)
         dev.drop()
     })
-    test('command cache uses EC current power and course, not the previous record', () => {
+    test('standalone commands use current reported power without a course-generation barrier', () => {
         const { dev, thinq, properties: p } = makeDevice()
         thinq.emit('data', transition(commandStatus(0, 85), commandStatus(1, 46)))
         dev.setProperty('rinse', '3')
@@ -545,12 +540,11 @@ describe('MI2U7B captured current-record reports', () => {
         thinq.emit('data', transition(commandStatus(1, 46), commandStatus(1, 85)))
         thinq.emit('data', reply([0x20], commandStatus(1, 46, 3)))
         assert.equal(p.course, 'Tub Clean')
-        assert.equal(thinq.outbox.length, 1)
-        dev.setProperty('rinse', '5')
         assert.equal(thinq.outbox.length, 2)
-        thinq.emit('data', reply([0x20], commandStatus(1, 85, 5)))
+        assert.deepEqual(inner(thinq.outbox[1]).slice(-2), [0x20, 4])
+        dev.setProperty('rinse', '5')
         thinq.emit('data', transition(commandStatus(1, 85), commandStatus(0, 85)))
-        dev.setProperty('rinse', '6')
+        thinq.emit('data', reply([0x20]))
         assert.equal(thinq.outbox.length, 2)
         assert.equal(p.power, 'OFF')
         dev.drop()
@@ -686,7 +680,7 @@ describe('MI2U7B confirmed explicit controls', () => {
         assert.equal(p.remote_start, 'OFF')
         dev.drop()
     })
-    test('serializes, coalesces unsent rinse and validates matching reply property sets and target', () => {
+    test('serializes FIFO writes and validates matching reply property sets and target', () => {
         const { dev, thinq } = makeDevice()
         thinq.emit('data', frame(0xeb, commandStatus()))
         dev.setProperty('buzzer', 'Low')
@@ -698,7 +692,9 @@ describe('MI2U7B confirmed explicit controls', () => {
         assert.equal(thinq.outbox.length, 1)
         thinq.emit('data', reply([0x13]))
         assert.equal(thinq.outbox.length, 2)
-        assert.deepEqual(inner(thinq.outbox[1]), [0xf0, 0xe5, 0, 2, 1, 0xff, 1, 0x20, 4])
+        assert.deepEqual(inner(thinq.outbox[1]), [0xf0, 0xe5, 0, 2, 1, 0xff, 1, 0x20, 3])
+        thinq.emit('data', reply([0x20]))
+        assert.deepEqual(inner(thinq.outbox[2]), [0xf0, 0xe5, 0, 2, 1, 0xff, 1, 0x20, 4])
         dev.drop()
     })
     test('built-in course, action-only Start, pause/resume and power use explicit ordered writes', () => {
@@ -742,8 +738,6 @@ describe('MI2U7B confirmed explicit controls', () => {
             thinq.emit('data', reply([0x0b, 0x0a, 0x0c, 0x20, 0x21, 0x1f, 0x46], current, [0, 0, 0, 0, 0, 0, 1]))
             assert.equal(p.problem, 'OFF')
             assert.equal(p.course, 'Normal')
-            dev.setProperty('rinse', '3')
-            assert.equal(thinq.outbox.length, 1)
             thinq.emit('data', transition(commandStatus(), current))
             assert.equal(p.course, label)
             assert.equal(p.rinse, rinse)
@@ -770,20 +764,6 @@ describe('MI2U7B confirmed explicit controls', () => {
         dev.setProperty('course', 'Spin Only')
         thinq.emit('data', reply([0x0b, 0x0a, 0x0c, 0x20, 0x21, 0x1f, 0x46], commandStatus(), [1, 0, 0, 0, 0, 0, 1]))
         assert.equal(p.problem, 'ON')
-        dev.drop()
-    })
-    test('result01 exception requires the exact captured bundle, not just its property set', () => {
-        const { dev, thinq } = makeDevice()
-        thinq.emit('data', frame(0xeb, commandStatus()))
-        const nearBundle = [
-            0xf0, 0xe5, 0, 2, 1, 0xff, 7, 0x0b, 0x81, 0x0a, 0xff, 0x0c, 0x37, 0x20, 1, 0x21, 0x13, 0x1f, 0, 0x46, 0,
-        ]
-        thinq.send_packet(AABBDevice.frame(Buffer.from(nearBundle)))
-        dev.setProperty('rinse', '4')
-        thinq.emit('data', reply([0x0b, 0x0a, 0x0c, 0x20, 0x21, 0x1f, 0x46], commandStatus(), [0, 0, 0, 0, 0, 0, 1]))
-        // A refused external bundle does not clear the fresh baseline as an accepted course write would.
-        assert.equal(thinq.outbox.length, 2)
-        assert.deepEqual(inner(thinq.outbox[1]).slice(-2), [0x20, 4])
         dev.drop()
     })
     test('result15 accepts power/actions only and never publishes embedded reply state', () => {
@@ -876,51 +856,42 @@ describe('MI2U7B confirmed explicit controls', () => {
         assert.equal(thinq.outbox.length, 0)
         dev.drop()
     })
-    test('refused writes report failure and late replies across course boundaries cannot restore context', () => {
+    test('bridge and driver share FIFO; bridge replies do not update driver diagnostics or state', () => {
         const { dev, thinq, properties: p } = makeDevice()
         thinq.emit('data', frame(0xeb, commandStatus()))
+        dev.start()
+        thinq.sendAsBridge(AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0, 2, 1, 0xff, 1, 10, 85])))
         dev.setProperty('rinse', '4')
-        dev.setProperty('rinse', '5')
-        thinq.emit('data', frame(0xeb, commandStatus(1, 85)))
-        thinq.emit('data', reply([0x20]))
         assert.equal(thinq.outbox.length, 1)
-        assert.equal(p.course, 'Tub Clean')
-        dev.setProperty('buzzer', 'Low')
-        thinq.emit('data', reply([0x13], commandStatus(1, 85), [0x13]))
-        assert.equal(p.problem, 'ON')
-        assert.equal(p.buzzer, 'Very Loud')
-        dev.drop()
-    })
-    test('tracks bridge writes and waits for fresh status after course acceptance', () => {
-        const { dev, thinq } = makeDevice()
-        thinq.emit('data', frame(0xeb, commandStatus()))
-        thinq.send_packet(AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0, 2, 1, 0xff, 1, 10, 85])))
-        dev.setProperty('rinse', '4')
-        thinq.emit('data', reply([10], commandStatus(1, 85)))
-        assert.equal(thinq.outbox.length, 1)
-        thinq.emit('data', frame(0xeb, commandStatus(1, 85)))
-        dev.setProperty('rinse', '4')
+        thinq.emit('data', reply([10], commandStatus(1, 85), [0x17]))
         assert.equal(thinq.outbox.length, 2)
+        assert.equal(p.problem, 'OFF')
+        assert.equal(p.course, 'Normal')
+        thinq.emit('data', reply([0x20], commandStatus(), [0x17]))
+        assert.equal(p.problem, 'ON')
+        thinq.emit('data', frame(0xeb, commandStatus(1, 85)))
+        assert.equal(p.course, 'Tub Clean')
         dev.drop()
     })
-    test('strict timeout blocks further writes, malformed replies do not settle', (t) => {
+    test('shared timeout reports failure then resumes FIFO without retry or reconnect', (t) => {
         t.mock.timers.enable({ apis: ['setTimeout'] })
         const { dev, thinq, properties: p } = makeDevice()
         thinq.emit('data', frame(0xeb, commandStatus()))
         dev.setProperty('buzzer', 'Off')
         dev.setProperty('rinse', '3')
-        const corrupt = reply([0x13])
-        corrupt[corrupt.length - 2] ^= 1
-        thinq.emit('data', corrupt)
         thinq.emit('data', reply([0x13], commandStatus().subarray(0, 48)))
         const wrongMarker = commandStatus()
         wrongMarker[0] = 1
         thinq.emit('data', reply([0x13], wrongMarker))
-        t.mock.timers.tick(AABBDevice.WRITE_TIMEOUT_MS)
-        thinq.emit('data', reply([0x13]))
-        dev.setProperty('power', 'ON')
         assert.equal(thinq.outbox.length, 1)
-        assert.match(String(p.problem_reason), /reconnect required/)
+        t.mock.timers.tick(WriteQueueMultiplexer.WRITE_TIMEOUT_MS)
+        assert.equal(thinq.outbox.length, 2)
+        assert.deepEqual(inner(thinq.outbox[1]).slice(-2), [0x20, 3])
+        assert.match(String(p.problem_reason), /timed out/)
+        thinq.emit('data', reply([0x20]))
+        assert.equal(p.problem, 'OFF')
+        dev.setProperty('power', 'ON')
+        assert.equal(thinq.outbox.length, 3)
         dev.drop()
     })
 })

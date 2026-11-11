@@ -134,12 +134,12 @@ for (const c of cases)
             now++
             for (const invalid of invalidFrames) receive(thinq, invalid)
             assert.equal(p.last_report_at, receipt)
-            assert.equal(thinq.sent.length, 1)
+            assert.equal(thinq.sent.length, c.modelId === 'MI2U7B' ? 5 : 1)
             assert.equal(p.last_door_report_at, undefined)
             assert.equal(ha.devices[thinq.id].config!.components.last_report_at.platform, 'sensor')
         })
 
-        test('processing failure leaves frame unacknowledged', (t) => {
+        test('processing failure follows the model transport ACK policy', (t) => {
             const { ha, thinq } = setup()
             const publish = ha.publishProperty.bind(ha)
             t.mock.method(ha, 'publishProperty', (id: string, key: string, value: string | number | undefined) => {
@@ -147,11 +147,11 @@ for (const c of cases)
                 publish(id, key, value)
             })
             assert.throws(() => receive(thinq, active()), /publish failed/)
-            assert.deepEqual(thinq.sent, [])
+            assert.equal(thinq.sent.length, c.modelId === 'MI2U7B' ? 1 : 0)
             assert.deepEqual(thinq.outbox, [])
         })
 
-        test('ACK follows completion publication and does not replay events on discovery', (t) => {
+        test('model ACK ordering preserves receipts and does not replay completion on discovery', (t) => {
             const { ha, thinq, dev } = setup()
             receive(thinq, active())
             const order: string[] = []
@@ -160,8 +160,8 @@ for (const c of cases)
                 order.push(key)
                 publish(id, key, value)
             })
-            thinq.on('sendData', (type) => {
-                if (type === 'ack') order.push('ack')
+            thinq.on('sendRawPacket', (packet) => {
+                if (packet.cmd === 'ack') order.push('ack')
             })
             const idle = Buffer.alloc(c.recordLength)
             idle[c.stateOffset] = 1
@@ -170,12 +170,20 @@ for (const c of cases)
             receive(thinq, active())
             assert.ok(order.indexOf('status') >= 0)
             assert.ok(order.indexOf('status') < order.indexOf('last_report_at'))
-            assert.ok(order.indexOf('last_report_at') < order.indexOf('ack'))
+            assert.ok(
+                c.modelId === 'MI2U7B'
+                    ? order.indexOf('ack') < order.indexOf('status')
+                    : order.indexOf('last_report_at') < order.indexOf('ack'),
+            )
             order.length = 0
             receive(thinq, finish())
             assert.ok(order.indexOf('cycle_finished') >= 0)
             assert.ok(order.indexOf('cycle_finished') < order.indexOf('last_report_at'))
-            assert.ok(order.indexOf('last_report_at') < order.indexOf('ack'))
+            assert.ok(
+                c.modelId === 'MI2U7B'
+                    ? order.indexOf('ack') < order.indexOf('cycle_finished')
+                    : order.indexOf('last_report_at') < order.indexOf('ack'),
+            )
             order.length = 0
             dev.publishConfig()
             assert.equal(order.includes('cycle_finished'), false)

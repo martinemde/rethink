@@ -8,7 +8,7 @@ import { Broker } from '@/cloud/mqtt-broker'
 import { DeviceManager } from '@/cloud/devmgr'
 import type { Metadata } from '@/cloud/thinq'
 import { MockHAConnection, buf } from '../helpers/mocks'
-import { MockLaundryDevice as MockThinq2Device } from '../helpers/laundry'
+import { MockThinq2Device } from '../helpers/mocks'
 import Dryer from '@/cloud/devices/BDVG_FX0003_US'
 
 const DEVICE_ID = 'eff416a1-7832-132c-a6e7-3034db631a60'
@@ -106,7 +106,10 @@ describe('Thinq2Connection, bridged', () => {
         await connect()
         fromCloud('ack', CLOUD_ACK)
         await until(() => device.sent.length > 0, 'the ack')
-        assert.deepEqual(device.sent, [{ cmd: 'ack', type: 1, data: CLOUD_ACK }])
+        assert.deepEqual(
+            device.sent.map(({ cmd, type, data }) => ({ cmd, type, data })),
+            [{ cmd: 'ack', type: 1, data: CLOUD_ACK }],
+        )
         assert.deepEqual(device.outbox, [])
     })
 
@@ -143,13 +146,13 @@ describe('Thinq2Connection, bridged', () => {
         const cloudCommand = 'AA09F0241001018CBB'
         const localCommand = 'AA09F0241001008DBB'
         const commandReply = buf('AA083000240053BB')
-        device.onData(status)
+        device.inject(status)
         assert.equal(device.outbox.length, 0)
         fromCloud('packet', cloudChime)
         await until(() => device.outbox.length === 1, 'the cloud chime write')
         handler!.setProperty('keep_remote_start', 'OFF')
         const cloudReceived = new Promise<void>((resolve) => {
-            bridge.bridgedDevices.get(DEVICE_ID)!.connection!.once('data', () => resolve())
+            bridge.bridgedDevices.get(DEVICE_ID)!.upstream!.once('packet', () => resolve())
         })
         fromCloud('packet', cloudCommand)
         await cloudReceived
@@ -164,17 +167,17 @@ describe('Thinq2Connection, bridged', () => {
                 if (message.cmd === 'device_packet') upstreamReplies.push(message.data)
             }
         })
-        device.onData(reply)
+        device.inject(reply)
         assert.deepEqual(
             device.outbox.map((b) => b.toString('hex').toUpperCase()),
             [cloudChime, localCommand],
         )
-        device.onData(commandReply)
+        device.inject(commandReply)
         assert.deepEqual(
             device.outbox.map((b) => b.toString('hex').toUpperCase()),
             [cloudChime, localCommand, cloudCommand],
         )
-        device.onData(commandReply)
+        device.inject(commandReply)
         await until(() => upstreamReplies.length === 3, 'all physical replies upstream')
         assert.deepEqual(
             upstreamReplies,

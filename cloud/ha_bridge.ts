@@ -30,14 +30,17 @@ import F_C__Y___W_A__QEUK from './devices/F_C__Y___W.A__QEUK'
 import F_VB_F___W_B_2QEUK from './devices/F_VB_F___W.B_2QEUK'
 import F_VB_Y___W_B_2QEUK from './devices/F_VB_Y___W.B_2QEUK'
 import VCDWL2QEUK from './devices/VCDWL2QEUK'
+import G2V7_Y___W_B_2QEUK from './devices/G2V7_Y___W.B_2QEUK'
 import T1789EFH_F from './devices/T1789EFH_F'
 import RV13U6AM8W_D_US_WIFI from './devices/RV13U6AM8W_D_US_WIFI'
 import F3L2CYU__ from './devices/F3L2CYU__'
 import F3L7CYK5W_US_WIFI from './devices/F3L7CYK5W_US_WIFI'
+import F3P2CYVAT__ from './devices/F3P2CYVAT__'
 import F3P3CYK2_ from './devices/F3P3CYK2_'
 import RV13B6BSD_D_US_WIFI from './devices/RV13B6BSD_D_US_WIFI'
 import RV13B6ES_D_US_WIFI from './devices/RV13B6ES_D_US_WIFI'
 import RC90U2_WW from './devices/RC90U2_WW'
+import RV13D5JSD_D_US from './devices/RV13D5JSD_D_US'
 import WTL_FXU_BDV_NA_01 from './devices/WTL_FXU_BDV_NA_01'
 import FAFXU25006 from './devices/FAFXU25006'
 import TLVE5BB from './devices/TLVE5BB'
@@ -91,6 +94,7 @@ const t2deviceTypes: Record<string, T2Factory> = {
     'F_V8_Y___W.B_2QEUK': F_V8_Y___W_B_2QEUK,
     'Y_V8_F___W.B_2QEUK': Y_V8_F___W_B_2QEUK,
     VCDWL2QEUK, // LG F4X7511TWS front-load washer (matched on modelId VCDWL2QEUK)
+    'G2V7_Y___W.B_2QEUK': G2V7_Y___W_B_2QEUK, // LG F2NX50S9TKC slim front-load washer, VCDWL2QEUK's record in the 0x20 envelope
     'F_V__F___W.B_1QEUK': F_V__F___W_B_1QEUK,
     'F_C__Y___W.A__QEUK': F_C__Y___W_A__QEUK,
     'F_VB_F___W.B_2QEUK': F_VB_F___W_B_2QEUK, // LG CV74J7S2QA washer/dryer combo
@@ -98,11 +102,13 @@ const t2deviceTypes: Record<string, T2Factory> = {
     'Y_VB_Y___W.B32QEUK': Y_VB_Y___W_B32QEUK, // LG F14R76BSTA front-loading washer
     T1789EFH_F, // LG WT7300CW top-loading washer
     RV13U6AM8W_D_US_WIFI, // LG DLE7300WE dryer
+    F3P2CYVAT__, // WM3600HWA front-load washer
     F3L2CYU__, // LG front-load washer
     F3L7CYK5W_US_WIFI, // LG front-load washer, same record layout as F3L2CYU__ but a different course table and two extra option bits
     F3P3CYK2_, // LG WM4200HBA front-load washer, 44-byte AABB records
     RV13B6BSD_D_US_WIFI, // LG electric dryer
     RV13B6ES_D_US_WIFI, // LG electric dryer, same frame layout as RV13B6BSD but Wrinkle Care sits in a different bitfield
+    RV13D5JSD_D_US, // LG DLEX4200B electric dryer
     WTL_FXU_BDV_NA_01, // LG WashTower
     FAFXU25006, // LG WM5800HVA front-load washer, long 0xFF-escaped AABB framing with 72-byte records
     TLVE5BB, // LG WT21BWV6 top-load washer, long 0xFF-escaped AABB framing with 50-byte records
@@ -121,6 +127,7 @@ const t2deviceTypes: Record<string, T2Factory> = {
     RAC_0B0001_WW: RAC_056905_WW, // a different European variant (deviceType 401, RTK_RTL8720cm), same TLV handler
     'F_V7_Y___W.B_2QEUK': F_V8_Y___W_B_2QEUK, // NOTE: we reuse F_V8_Y___W_B_2QEUK as the models appear to be compatible
     'F_V7_Y___W.B__QEUK': F_V8_Y___W_B_2QEUK, // LG F2V5PS0W front-load washer - confirmed working, status/course/spin/temp/energy/remaining_time all decode correctly against a real unit
+    'F_V7_Y___W.A__QEUK': F_C__Y___W_A__QEUK, // LG WV5-1275W
     'F_V__Y___W.B_2QEUK': F_V8_Y___W_B_2QEUK, // NOTE: we reuse F_V8_Y___W_B_2QEUK as the models appear to be compatible
     'F_V__Y___W.B__QEUK': F_V8_Y___W_B_2QEUK, // LG WV9-1609B front-load washer (AU), status/course/temp/spin/times/cycles/locks checked against bridged LG cloud state and the panel
     'F_VA_F___W.B__QEUK': F_V__F___W_B_1QEUK, // FV1413H2BA front-load washer SoftAP model (deviceType 201)

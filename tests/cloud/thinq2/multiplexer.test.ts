@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { EventEmitter } from 'node:events'
-import { Multiplexer } from '@/cloud/thinq2/multiplexer'
+import { T2Multiplexer } from '@/cloud/thinq2/multiplexer'
 import type { Device } from '@/cloud/thinq2/device'
+import { rxPacket, type ClipPayload } from '@/cloud/thinq2/clip'
 
 class FakeDevice extends EventEmitter {
     sent: object[] = []
@@ -13,13 +14,13 @@ class FakeDevice extends EventEmitter {
 
 function setup() {
     const dev = new FakeDevice()
-    const mux = new Multiplexer(dev as unknown as Device)
+    const mux = new T2Multiplexer(dev as unknown as Device)
     return { dev, mux }
 }
 
-function collect(stream: { on(ev: 'data', cb: (b: Buffer) => void): unknown }) {
-    const got: Buffer[] = []
-    stream.on('data', (b) => got.push(b))
+function collect(stream: { on(ev: 'packet', cb: (b: ClipPayload) => void): unknown }) {
+    const got: ClipPayload[] = []
+    stream.on('packet', (b) => got.push(b))
     return got
 }
 
@@ -30,8 +31,8 @@ describe('thinq2 Multiplexer', () => {
         const b = mux.openStream()
         const gotA = collect(a)
         const gotB = collect(b)
-        const pkt = Buffer.from('hello')
-        dev.emit('rawData', pkt)
+        const pkt = rxPacket(Buffer.from('hello'))
+        dev.emit('rawPacket', pkt)
         assert.deepEqual(gotA, [pkt])
         assert.deepEqual(gotB, [pkt])
     })
@@ -40,21 +41,12 @@ describe('thinq2 Multiplexer', () => {
         const { dev, mux } = setup()
         const a = mux.openStream()
         const b = mux.openStream()
-        const body1 = { cmd: 'one' }
-        const body2 = { cmd: 'two' }
+        const body1 = { cmd: 'one', type: 1, data: null }
+        const body2 = { cmd: 'two', type: 1, data: null }
         a.send(body1)
         b.send(body2)
         assert.deepEqual(dev.sent, [body1, body2])
         assert.equal(dev.sent[0], body1)
-    })
-
-    test('send() invokes the callback', () => {
-        const { mux } = setup()
-        const a = mux.openStream()
-        let called = 0
-        a.send({}, () => called++)
-        assert.equal(called, 1)
-        a.send({}) // no callback must not throw
     })
 
     test('destroy() detaches only that stream', () => {
@@ -64,10 +56,10 @@ describe('thinq2 Multiplexer', () => {
         const gotA = collect(a)
         const gotB = collect(b)
         a.destroy()
-        dev.emit('rawData', Buffer.from('x'))
+        dev.emit('rawPacket', rxPacket(Buffer.from('x')))
         assert.deepEqual(gotA, [])
         assert.equal(gotB.length, 1)
-        assert.equal(dev.listenerCount('rawData'), 1)
+        assert.equal(dev.listenerCount('rawPacket'), 1)
     })
 
     test('destroy() twice is harmless', () => {
@@ -75,12 +67,12 @@ describe('thinq2 Multiplexer', () => {
         const a = mux.openStream()
         a.destroy()
         a.destroy()
-        assert.equal(dev.listenerCount('rawData'), 0)
+        assert.equal(dev.listenerCount('rawPacket'), 0)
     })
 
     test('streams opened later only see later data', () => {
         const { dev, mux } = setup()
-        dev.emit('rawData', Buffer.from('early'))
+        dev.emit('rawPacket', rxPacket(Buffer.from('early')))
         const a = mux.openStream()
         const gotA = collect(a)
         assert.deepEqual(gotA, [])

@@ -1850,8 +1850,7 @@ describe('BDVG_FX0003_US strict command reconciliation', () => {
             dev.setProperty('power', 'OFF')
             const rec = Buffer.from(EB_CONNECT.subarray(15, 57))
             if (variant === 'refused') rec[13] = 0
-            thinq.emit(
-                'data',
+            thinq.onData(
                 writeReply(
                     thinq.outbox[0],
                     variant === 'absent' ? undefined : rec,
@@ -1956,8 +1955,7 @@ describe('BDVG_FX0003_US confirmed clock display', () => {
             const { ha, thinq, dev } = makeDevice()
             thinq.onData(longFrame(0xeb, record(true)))
             dev.setProperty('clock_display', 'OFF')
-            thinq.emit(
-                'data',
+            thinq.onData(
                 writeReply(
                     thinq.outbox[0],
                     variant === 'absent' ? undefined : record(variant === 'stale'),
@@ -2258,8 +2256,7 @@ describe('BDVG_FX0003_US ending melody', () => {
             thinq.onData(EB_CONNECT)
             dev.setProperty('melody', 'Breeze')
             const rec = Buffer.from(MELODY_CAPTURES[variant === 'refused' ? 2 : 1].reply.subarray(11, -2))
-            thinq.emit(
-                'data',
+            thinq.onData(
                 writeReply(
                     thinq.outbox[0],
                     variant === 'absent' ? undefined : rec,

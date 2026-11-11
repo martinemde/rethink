@@ -1,14 +1,15 @@
 import AABBDevice from './aabb_device'
-import { Multiplexer } from '../thinq2/multiplexer'
+import { T2Multiplexer } from '../thinq2/multiplexer'
 import { Device } from '../thinq2/device'
-import { StreamImpl, type Stream } from '../thinq2/multiplexer'
+import { StreamBase, type Stream } from '../thinq2/multiplexer'
+import { fromRxPacket, txPacket, type ClipPayload } from '../thinq2/clip'
 import crc16 from '@/util/crc16'
 
 type Callback = (response?: Buffer) => void
-type Write = { stream: LaundryStream; inner: Buffer; body: object; callback?: Callback }
+type Write = { stream: LaundryStream; inner: Buffer; body: ClipPayload; callback?: Callback }
 type Pending = {
     stream: LaundryStream
-    build: () => { inner: Buffer; body: object } | undefined
+    build: () => { inner: Buffer; body: ClipPayload } | undefined
     callback?: Callback
     coalescingKey?: string
 }
@@ -49,17 +50,15 @@ function properties(inner: Buffer, classByte: number): number[] | undefined {
     return props
 }
 
-export class LaundryStream extends StreamImpl {
+export class LaundryStream extends StreamBase {
     destroyed = false
     onFailure?: (writes: readonly { stream: LaundryStream; inner: Buffer }[]) => void
 
     constructor(readonly mux: LaundryMultiplexer) {
-        super(mux)
-        mux.dev.removeListener('rawData', this.onDataBound)
-        mux.dev.removeListener('close', this.onCloseBound)
+        super()
     }
 
-    send(body: object, callback?: Callback) {
+    send(body: ClipPayload, callback?: Callback) {
         if (this.destroyed) return callback?.()
         this.mux.send(this, body, callback)
     }
@@ -72,7 +71,7 @@ export class LaundryStream extends StreamImpl {
             stream: this,
             build: () => {
                 const inner = builder()
-                return inner && { inner: Buffer.from(inner), body: Device.packet(AABBDevice.frame(inner)) }
+                return inner && { inner: Buffer.from(inner), body: txPacket(AABBDevice.frame(inner)) }
             },
             callback,
             coalescingKey,
@@ -88,7 +87,7 @@ export class LaundryStream extends StreamImpl {
 }
 
 /** The two laundry protocols have no transaction IDs: bridge and HA must share one FIFO. */
-export class LaundryMultiplexer extends Multiplexer {
+export class LaundryMultiplexer extends T2Multiplexer {
     private streams = new Set<LaundryStream>()
     private queue: Pending[] = []
     private active?: Write
@@ -103,7 +102,7 @@ export class LaundryMultiplexer extends Multiplexer {
         readonly classByte: number,
     ) {
         super(dev)
-        dev.on('rawData', this.onData)
+        dev.on('rawPacket', this.onPacket)
         dev.on('close', this.onClose)
     }
 
@@ -129,7 +128,7 @@ export class LaundryMultiplexer extends Multiplexer {
         )
     }
 
-    send(stream: LaundryStream, body: object, callback?: Callback) {
+    send(stream: LaundryStream, body: ClipPayload, callback?: Callback) {
         const message = body as { cmd?: string; data?: unknown }
         const packet =
             message.cmd === 'packet' && typeof message.data === 'string' ? Buffer.from(message.data, 'hex') : undefined
@@ -215,8 +214,9 @@ export class LaundryMultiplexer extends Multiplexer {
         return new Set(received).size === props.length && props.every((prop) => received.includes(prop))
     }
 
-    private onData = (packet: Buffer) => {
-        const inner = unframe(packet)
+    private onPacket = (payload: ClipPayload) => {
+        const packet = fromRxPacket(payload)
+        const inner = packet && unframe(packet)
         const answered = this.active && inner && this.matches(inner, this.active.inner) ? this.active : undefined
         if (answered) {
             clearTimeout(this.timer)
@@ -233,7 +233,7 @@ export class LaundryMultiplexer extends Multiplexer {
         if (busy) failedSessions.add(this.dev)
         try {
             for (const stream of [...this.streams]) {
-                if (!stream.destroyed) stream.emit('data', packet)
+                if (!stream.destroyed) stream.emit('packet', payload)
             }
             answered?.callback?.(packet)
         } finally {
@@ -263,7 +263,7 @@ export class LaundryMultiplexer extends Multiplexer {
 
     private onClose = () => {
         this.closed = true
-        this.dev.removeListener('rawData', this.onData)
+        this.dev.removeListener('rawPacket', this.onPacket)
         this.dev.removeListener('close', this.onClose)
         this.fail()
         for (const stream of this.streams) stream.destroy()

@@ -4,11 +4,13 @@ import { setFilter } from '@/util/logging'
 import type { Connection, DeviceDiscovery } from '@/cloud/homeassistant'
 import type { Metadata } from '@/cloud/thinq'
 import { Device as Thinq2Device } from '@/cloud/thinq2/device'
-import type { DeployAppInfo } from '@/cloud/thinq2/clip'
+import { rxPacket, txPacket, type DeployAppInfo } from '@/cloud/thinq2/clip'
+import type { Stream } from '@/cloud/thinq2/multiplexer'
 import { Device as Thinq1Device } from '@/cloud/thinq1/device'
-import type { Connection as Thinq1Connection } from '@/cloud/thinq1/connection'
+import { type Connection as Thinq1Connection } from '@/cloud/thinq1/connection'
 import type { Broker } from '@/cloud/mqtt-broker'
 import assert from 'node:assert/strict'
+import { statusMessage } from '@/cloud/thinq1/rti'
 
 // Suppress device logging noise during tests. Imported for side effect.
 setFilter(() => false)
@@ -105,31 +107,48 @@ export class MockHAConnection extends EventEmitter {
     }
 }
 
-type SentMessage = { cmd: string; type: number; data: string | object }
+type SentMessage = { cmd?: string; type?: number; data?: unknown }
 
 export class MockThinq2Device extends Thinq2Device {
     outbox: Buffer[] = []
     sent: SentMessage[] = []
 
     constructor(id: string, meta: Metadata) {
-        // Legacy send_packet remains recorded below. ACKs use the real stream/sendRaw path,
-        // with only the final broker publish replaced by a recorder.
-        const broker = {
-            publish: (packet: { payload: string }) => {
-                const { cmd, type, data } = JSON.parse(packet.payload)
-                this.sent.push({ cmd, type, data })
-            },
-        } as unknown as Broker
-        super(broker, 'mock/topic', id, meta, undefined as unknown as DeployAppInfo, undefined)
+        // The real Device only touches `broker` from inside `sendRaw`; we override `sendRaw` so the
+        // broker is never actually used. `deployAppInfo` is only read by the cloud bridge, which
+        // no device test goes through.
+        super(null as unknown as Broker, 'mock/topic', id, meta, undefined as unknown as DeployAppInfo, undefined)
     }
 
-    override send(cmd: string, type: number, data: string | object) {
-        this.sent.push({ cmd, type, data })
+    inject(buf: Buffer) {
+        super.emit('rawPacket', rxPacket(buf))
     }
 
-    override send_packet(buf: Buffer) {
-        this.emit('sendData', 'packet', buf)
-        this.outbox.push(buf)
+    emit(key: string, ...args: unknown[]): boolean {
+        // redirect the 'data' event so that we don't have to rewrite tens of tests
+        if (key === 'data') {
+            this.inject(args[0] as Buffer)
+            return true
+        }
+        return super.emit(key as any, ...args)
+    }
+
+    override sendRaw(body: object) {
+        this.emit('sendRawPacket', body)
+        const bodyMsg = body as SentMessage
+
+        // unwrap the binary buffer from the raw message so that preexisting tests work
+        if (bodyMsg.cmd === 'packet' && typeof bodyMsg.data === 'string')
+            this.outbox.push(Buffer.from(bodyMsg.data, 'hex'))
+        else this.sent.push(bodyMsg)
+    }
+
+    private bridgeStream?: Stream
+
+    // What the bridge sends for the LG cloud, down a stream of its own
+    sendAsBridge(data: Buffer) {
+        this.bridgeStream ??= this.openStream()
+        this.bridgeStream.send(txPacket(data))
     }
 
     resetRecorder() {
@@ -148,8 +167,21 @@ export class MockThinq1Device extends Thinq1Device {
         super(con, id, meta)
     }
 
-    override send(body: object) {
-        this.emit('sendData', 'packet', body)
+    inject(buf: Buffer) {
+        super.emit('rawPacket', statusMessage(this.id, buf))
+    }
+
+    emit(key: string, ...args: unknown[]): boolean {
+        // redirect the 'data' event so that we don't have to rewrite tens of tests
+        if (key === 'data') {
+            this.inject(args[0] as Buffer)
+            return true
+        }
+        return super.emit(key as any, ...args)
+    }
+
+    override sendRaw(body: object) {
+        this.emit('sendRawPacket', body)
         this.sent.push(body)
     }
 

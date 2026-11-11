@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Broker, type Client } from '../../../cloud/mqtt-broker'
 import { DeviceAcceptor, type Device } from '../../../cloud/thinq2/device'
+import { fromRxPacket } from '../../../cloud/thinq2/clip'
 
 // Exercise the broker publish event: this is where retain metadata previously disappeared.
 test('retained application frames are suppressed without blocking provisioning or fresh frames', () => {
@@ -12,7 +13,10 @@ test('retained application frames are suppressed without blocking provisioning o
     const data: Buffer[] = []
     acceptor.on('newDevice', (created) => {
         device = created
-        created.on('data', (packet) => data.push(packet))
+        created.on('rawPacket', (packet) => {
+            const buf = fromRxPacket(packet)
+            if (buf) data.push(buf)
+        })
     })
     const publish = (cmd: string, retain: boolean, payload: unknown, provisioning = false) => {
         broker.publish(

@@ -1,7 +1,7 @@
 import { Device } from '@/cloud/thinq2/device'
 import type { Metadata } from '@/cloud/thinq'
 import type { Broker } from '@/cloud/mqtt-broker'
-import type { DeployAppInfo } from '@/cloud/thinq2/clip'
+import { rxPacket, txPacket, type DeployAppInfo } from '@/cloud/thinq2/clip'
 
 // Exercise the real packet/sendRaw transport; only the final broker publish is recorded.
 export class MockLaundryDevice extends Device {
@@ -19,6 +19,10 @@ export class MockLaundryDevice extends Device {
         super(broker, 'mock/topic', id, meta, undefined as unknown as DeployAppInfo, undefined)
     }
 
+    onData(packet: Buffer) {
+        this.emit('rawPacket', rxPacket(packet))
+    }
+
     resetRecorder() {
         this.outbox = []
         this.sent = []
@@ -33,5 +37,5 @@ export function sendCloud(device: Device, packet: Buffer) {
         stream = device.openStream()
         cloudStreams.set(device, stream)
     }
-    stream.send(Device.packet(packet))
+    stream.send(txPacket(packet))
 }
