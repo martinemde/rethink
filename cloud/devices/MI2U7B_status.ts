@@ -39,7 +39,7 @@ export const STATES = {
     39: 'Softener input',
     40: 'Pollution detecting',
     41: 'Tub cleaning',
-    42: 'End remote maintain on',
+    42: 'Remote maintain',
     43: 'Steam',
     47: 'Laundry care',
     48: 'EZDispense cleaning',

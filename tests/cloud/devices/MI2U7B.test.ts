@@ -25,6 +25,43 @@ const CAPTURED_STANDBY = Buffer.from(
     'hex',
 )
 
+// User-operated MI2U7B captures (2026-11-11): protocol/status only, no appliance IDs.
+// EC records are previous/current. The first setting ON also clears unknown bits37/02 and39/20.
+const REMOTE_CAPTURES = {
+    SETTING_ON: Buffer.from(
+        'aaff200a007400ae1f000100ec006200000001132e00000000000000002700270000002e0100ee0000000000040000000000000802002030000000000b00000000000001132e00000000000000002700270000002e0100ee0000000000040000000000000800000034000000000b0000002246bb',
+        'hex',
+    ),
+    SETTING_OFF: Buffer.from(
+        'aaff200a007400ae24000100ec006200000001132e00000000000000002700270000002e0100ee0000000000040000000000000800000034000000000b00000000000001132e00000000000000002700270000002e0100ee0000000000040000000000000800000030000000000b00000083f1bb',
+        'hex',
+    ),
+    ARMED: Buffer.from(
+        'aaff200a007400ae43000100ec006200000001132e00000000000000002700270000002e010bee0000000000040000000000000800000030000000000b00000000000001132e00000000000000002700270000002e010bee0000000000040000000000000810000030000000000b0000004a55bb',
+        'hex',
+    ),
+    LOCKED: Buffer.from(
+        'aaff200a007400ae45000100ec006200000001132e00000000000000002700270000002e010bee0000000000040000000000000810000030000000000b00000000000001132e00000000000000002700270000002e010bee0000000000040000000000000810010030000000000b00000043a9bb',
+        'hex',
+    ),
+    DISARMED: Buffer.from(
+        'aaff200a007400ae4d000100ec006200000001132e00000000000000002700270000002e010bee0000000000040000000000000810010030000000000b00000000000001132e00000000000000002700270000002e010bee0000000000040000000000000800010030000000000b0000001869bb',
+        'hex',
+    ),
+    UNLOCKED: Buffer.from(
+        'aaff200a007400ae4e000100ec006200000001132e00000000000000002700270000002e010bee0000000000040000000000000800010030000000000b00000000000001132e00000000000000002700270000002e010bee0000000000040000000000000800000030000000000b000000068dbb',
+        'hex',
+    ),
+    COMPLETED: Buffer.from(
+        'aaff200a007400aeca000100ec00620000000013ff0000000000000000010008000400000e01810000000000040000000000000010010034000000000b0000000000000013ff0000000000000000010008000500002a0e810000000000040000000000000010010034000000000b000000a4a1bb',
+        'hex',
+    ),
+    RETAINED: Buffer.from(
+        'aaff200a007400aecd000100ec00620000000013ff0000000000000000010008000500002a0e810000000000040000000000000010010034000000000b0000000000000013ff0000000000000000080008000500002a2a810000000000040000000000000010010034000000000b0000002859bb',
+        'hex',
+    ),
+} as const
+
 // Synthetic mutations cover boundaries and fields not varied in the captured reports.
 function checksum(packet: Buffer): Buffer {
     packet.writeUInt16BE(crc16(packet.subarray(0, packet.length - 3)), packet.length - 3)
@@ -105,6 +142,8 @@ describe('MI2U7B passive exact-model support', () => {
             buzzer: 'Off',
             warm_water: 'OFF',
             keep_remote_start: 'OFF',
+            remote_start: 'OFF',
+            door_lock: 'OFF',
             melody: 'Normal',
             course: 'Tub Clean',
             status: 'Rinsing',
@@ -383,6 +422,69 @@ describe('MI2U7B automatic ACKs', () => {
     })
 })
 
+describe('MI2U7B captured remote setting and panel arming', () => {
+    test('accepted setting writes wait for captured readback; arming and lock remain independent', () => {
+        const { dev, thinq, properties: p } = makeDevice()
+        thinq.emit('data', CAPTURED_STANDBY)
+        for (const [value, packet] of [
+            ['ON', REMOTE_CAPTURES.SETTING_ON],
+            ['OFF', REMOTE_CAPTURES.SETTING_OFF],
+        ] as const) {
+            const before = p.keep_remote_start
+            dev.setProperty('keep_remote_start', value)
+            assert.deepEqual(
+                thinq.outbox[thinq.outbox.length - 1],
+                AABBDevice.frame(Buffer.from([0xf0, 0x24, 0x10, 1, value === 'ON' ? 1 : 0])),
+            )
+            thinq.emit('data', AABBDevice.frame(Buffer.from([0x20, 0, 0x24, 0])))
+            assert.equal(p.problem, 'OFF')
+            assert.equal(p.keep_remote_start, before)
+            assert.equal(parseSideKickFrame(packet)?.kind, 'status')
+            thinq.emit('data', packet)
+            assert.equal(p.keep_remote_start, value)
+            assert.equal(p.remote_start, 'OFF')
+            assert.equal(p.door_lock, 'OFF')
+        }
+        dev.drop()
+    })
+    test('panel arming/disarming and following lock reports do not change the setting', () => {
+        const { dev, thinq, properties: p } = makeDevice()
+        for (const [packet, remote, lock] of [
+            [REMOTE_CAPTURES.ARMED, 'ON', 'OFF'],
+            [REMOTE_CAPTURES.LOCKED, 'ON', 'ON'],
+            [REMOTE_CAPTURES.DISARMED, 'OFF', 'ON'],
+            [REMOTE_CAPTURES.UNLOCKED, 'OFF', 'OFF'],
+        ] as const) {
+            assert.equal(parseSideKickFrame(packet)?.kind, 'status')
+            thinq.emit('data', packet)
+            assert.equal(p.remote_start, remote)
+            assert.equal(p.door_lock, lock)
+            assert.equal(p.keep_remote_start, 'OFF')
+        }
+        assert.deepEqual(thinq.outbox, [])
+        dev.drop()
+    })
+    test('Spin Only completion retains remote arming, lock and setting without starting another cycle', () => {
+        const { dev, thinq, properties: p } = makeDevice()
+        for (const [packet, remaining] of [
+            [REMOTE_CAPTURES.COMPLETED, 1],
+            [REMOTE_CAPTURES.RETAINED, 8],
+        ] as const) {
+            assert.equal(parseSideKickFrame(packet)?.kind, 'status')
+            thinq.emit('data', packet)
+            assert.equal(p.status, 'Remote maintain')
+            assert.equal(p.course, 'Spin Only')
+            assert.equal(p.remote_start, 'ON')
+            assert.equal(p.door_lock, 'ON')
+            assert.equal(p.keep_remote_start, 'ON')
+            assert.equal(p.remaining_time, remaining)
+        }
+        // The eight-minute field does not indicate a restart: state remains42.
+        assert.deepEqual(thinq.outbox, [])
+        dev.drop()
+    })
+})
+
 describe('MI2U7B captured current-record reports', () => {
     test('captured EC98 selects the last record; captured EB49 still decodes', () => {
         const { dev, thinq, properties: p } = makeDevice()
@@ -559,7 +661,7 @@ describe('MI2U7B confirmed explicit controls', () => {
         }
         dev.drop()
     })
-    test('Keep Remote Start On uses short F024 commands/replies and byte40 mask04, not readiness', () => {
+    test('Keep Remote Start uses short F024 commands/replies and byte40 mask04, not readiness', () => {
         const { dev, thinq, properties: p } = makeDevice()
         const rec = commandStatus()
         rec[40] = 0x30
@@ -581,7 +683,7 @@ describe('MI2U7B confirmed explicit controls', () => {
         rec[40] = 0x30
         thinq.emit('data', frame(0xeb, rec))
         assert.equal(p.keep_remote_start, 'OFF')
-        assert.equal(p.remote_start, undefined)
+        assert.equal(p.remote_start, 'OFF')
         dev.drop()
     })
     test('serializes, coalesces unsent rinse and validates matching reply property sets and target', () => {

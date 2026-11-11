@@ -71,13 +71,21 @@ the second one is the model it is sold as.
 
 SideKick (`MI2U7B`) supports power, Start/Pause/Resume, five built-in courses,
 Spin Only and Active Wear downloaded courses, rinse count, Warm Water, buzzer,
-ending melody and Keep Remote Start On. It reports status, time, energy and drawer
-state. Controls were captured through the LG bridge; standalone course, rinse
+ending melody and Keep Remote Start. It reports status, time, energy and drawer
+state, plus separate Remote start and Door lock indicators. Controls were captured through the LG bridge; standalone course, rinse
 and Warm Water settings were also confirmed on the appliance. Those settings
 work in the tested powered-on Standby state without Remote Start. Cycle-finished
 notification validation is limited to Tub Clean; other courses and the complete
 Home Assistant command path are not yet validated. No polling or startup commands
 are sent.
+
+User-operated captures verified Keep Remote Start ON/OFF readback separately from
+panel arming/disarming and the following lock-bit changes. After Spin Only,
+state42 reports Remote maintain with the setting, arming and lock bits retained;
+the panel displayed “Remote still on” and the user could start another cycle.
+No restart packets were supplied. Lock interpretation follows the existing washer
+mapping and captured correlation, not a physical latch check. This SideKick has
+no KeepFresh support. See [capture provenance and limits](docs/sidekick-remote-start.md).
 
 #### Dryers
 
