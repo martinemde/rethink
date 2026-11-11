@@ -654,6 +654,7 @@ describe('BDVG_FX0003_US', () => {
             child_lock: 'OFF',
             remote_start: 'OFF',
             cycle_optimization: 'ON',
+            keep_remote_start: 'None',
             remote_maintain: 'OFF',
             energy_saver: 'OFF',
             keep_fresh: 'OFF',
@@ -793,13 +794,13 @@ describe('BDVG_FX0003_US', () => {
     })
 
     test('the door is an event, not a record field', () => {
-        assert.deepEqual(feed([DOOR_OPEN]), { power: 'ON', door: 'ON' })
+        assert.deepEqual(feed([DOOR_OPEN]), { keep_remote_start: 'None', power: 'ON', door: 'ON' })
         assert.equal(feed([DOOR_OPEN, DOOR_SHUT]).door, 'OFF')
         assert.equal(feed([EB_CONNECT]).door, undefined)
     })
 
     test('power follows the event payload byte 9, and the power-off record clears the course', () => {
-        assert.deepEqual(feed([POWER_ON_EVENT]), { power: 'OFF' })
+        assert.deepEqual(feed([POWER_ON_EVENT]), { keep_remote_start: 'None', power: 'OFF' })
         const p = feed([APP_RACK_DRY, POWER_OFF_EVENT, POWER_OFF_RECORD])
         assert.equal(p.power, 'OFF')
         assert.equal(p.status, 'Off')
@@ -828,11 +829,13 @@ describe('BDVG_FX0003_US', () => {
         thinq.emit('data', END)
         assert.equal(p().status, 'End remote maintain on')
         assert.equal(p().remote_maintain, 'ON')
+        assert.equal(p().keep_remote_start, 'None')
         assert.equal(p().energy, 156)
 
         thinq.emit('data', OFF_AFTER_END)
         assert.equal(p().power, 'OFF')
         assert.equal(p().remote_maintain, 'OFF')
+        assert.equal(p().keep_remote_start, 'None')
         assert.equal(p().remaining_time, 0)
     })
 
@@ -841,14 +844,14 @@ describe('BDVG_FX0003_US', () => {
         const p = () => ha.devices[DEVICE_ID].properties
         dev.setProperty('power', 'ON')
         thinq.emit('data', E6_REMOTE_ON_REPLY)
-        assert.deepEqual(p(), { power: 'ON' })
+        assert.deepEqual(p(), { keep_remote_start: 'None', power: 'ON' })
         dev.setProperty('power', 'OFF')
         thinq.emit('data', E6_REMOTE_OFF_REPLY)
-        assert.deepEqual(p(), { power: 'OFF' })
+        assert.deepEqual(p(), { keep_remote_start: 'None', power: 'OFF' })
     })
 
     test('with no power write pending, a write reply publishes nothing', () => {
-        assert.deepEqual(feed([E6_CHIME_STALE, E6_REMOTE_ON_REPLY]), {})
+        assert.deepEqual(feed([E6_CHIME_STALE, E6_REMOTE_ON_REPLY]), { keep_remote_start: 'None' })
     })
 
     test('a chime reply does not confirm a pending power write', () => {
@@ -1063,7 +1066,7 @@ describe('BDVG_FX0003_US', () => {
                     'aaff200a0045000042000100eb003300030d0e0f2e00000000000000002e002e0000002e01000600000001150402002d1e20000000000c3800000000000004010004553dbb',
                 ),
             ]),
-            {},
+            { keep_remote_start: 'None' },
         )
     })
 
@@ -1309,7 +1312,7 @@ describe('BDVG_FX0003_US problem sensor', () => {
         dev.setProperty('buzzer', 'Low')
         thinq.emit('data', E6_CHIME_STALE)
         thinq.emit('data', E6_CHIME_STALE)
-        assert.deepEqual(ha.devices[DEVICE_ID].properties, {})
+        assert.deepEqual(ha.devices[DEVICE_ID].properties, { keep_remote_start: 'None' })
     })
 
     test("the reply to the app's write, sent through the bridge, is not taken for ours", () => {
@@ -1318,7 +1321,7 @@ describe('BDVG_FX0003_US problem sensor', () => {
         dev.setProperty('power', 'ON')
         assert.equal(thinq.outbox.length, 1)
         thinq.emit('data', E6_CHIME_REFUSED)
-        assert.deepEqual(ha.devices[DEVICE_ID].properties, {})
+        assert.deepEqual(ha.devices[DEVICE_ID].properties, { keep_remote_start: 'None' })
         assert.equal(thinq.outbox.length, 2)
     })
 })
@@ -1329,7 +1332,7 @@ const REMOTE_MAINTAIN_REPLY = buf('aa083000240053bb')
 
 describe('BDVG_FX0003_US remote maintain', () => {
     // While bridged, the cloud's packets go out through the same device object as ours.
-    test("the ack of the cloud's command changes nothing", () => {
+    test("the ack of the cloud's command does not clear our problem", () => {
         const { ha, thinq, dev } = makeDevice()
         dev.setProperty('buzzer', 'Off')
         thinq.emit('data', E6_CHIME_REFUSED)
@@ -1351,13 +1354,100 @@ describe('BDVG_FX0003_US remote maintain', () => {
     })
 
     test('the standby bit is a sensor, not a control', () => {
-        const { ha, dev } = makeDevice()
+        const { ha, thinq, dev } = makeDevice()
         dev.publishConfig()
         const c = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.equal(c.remote_maintain.platform, 'binary_sensor')
         assert.equal(c.remote_maintain.command_topic, undefined)
         dev.setProperty('remote_maintain', 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, undefined)
+        assert.deepEqual(thinq.outbox, [])
+        dev.drop()
+    })
+
+    test('Keep Remote Start uses captured commands and only matched successful feedback', () => {
+        const { ha, thinq, dev } = makeDevice()
+        const p = () => ha.devices[DEVICE_ID].properties.keep_remote_start
+        const c = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        assert.equal(c.remote_maintain.platform, 'binary_sensor')
+        assert.equal(c.remote_maintain.state_topic, '$this/remote_maintain')
+        assert.equal(c.remote_maintain.unique_id, '$deviceid-remote_maintain')
+        assert.equal(c.remote_maintain.entity_category, 'diagnostic')
+        thinq.emit('data', OFF_AFTER_END)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, 'OFF')
+        assert.equal(c.keep_remote_start.platform, 'switch')
+        assert.equal(c.keep_remote_start.entity_category, 'config')
+        assert.equal(p(), 'None')
+        thinq.emit('data', REMOTE_MAINTAIN_REPLY) // unsolicited
+        assert.equal(p(), 'None')
+        for (const [value, captured] of [
+            ['ON', CLOUD_REMOTE_MAINTAIN_ON],
+            ['OFF', 'AA09F0241001008DBB'], // captured disable, 2026-11-01 23:33:52 UTC
+            ['ON', CLOUD_REMOTE_MAINTAIN_ON],
+        ]) {
+            const before = p()
+            dev.setProperty('keep_remote_start', value)
+            assert.equal(hex(thinq.outbox[thinq.outbox.length - 1]), captured)
+            assert.equal(p(), before) // no send-time echo
+            thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+            assert.equal(p(), value)
+            assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, 'OFF')
+        }
+        thinq.emit('data', END)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, 'ON')
+        assert.equal(p(), 'ON')
+        thinq.emit('data', OFF_AFTER_END)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, 'OFF')
+        assert.equal(p(), 'ON') // record 27 bit 0x02 is not setting readback
+        dev.publishConfig()
+        assert.equal(p(), 'ON') // discovery refresh is not reconstruction
+        dev.drop()
+        const replacement = new DUT(ha.asConnection(), thinq, META)
+        assert.equal(p(), 'None')
+        replacement.drop()
+    })
+
+    test('bridged writes confirm the setting, but another command cannot', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.send_packet(buf(CLOUD_REMOTE_MAINTAIN_ON))
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
+        // Synthetic other command in the same reply family, not an observed setting command.
+        thinq.send_packet(buf('aa09f0241101008cbb'))
+        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
+        dev.drop()
+    })
+
+    test('corrupt or malformed replies cannot consume pending setting feedback', () => {
+        const { ha, thinq, dev } = makeDevice()
+        dev.setProperty('keep_remote_start', 'ON')
+        // Synthetic corruptions of the captured successful reply.
+        for (const frame of ['aa083000240052bb', 'aa0730002450bb', 'aa09300024000052bb', 'aa0820002400a3bb']) {
+            thinq.emit('data', buf(frame))
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+        }
+        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
+        dev.drop()
+    })
+
+    test('refused commands and invalid values do not change the setting', () => {
+        const { ha, thinq, dev } = makeDevice()
+        for (const value of ['', 'on', '1']) dev.setProperty('keep_remote_start', value)
+        dev.setProperty('remote_maintain', 'ON')
+        assert.equal(thinq.outbox.length, 0)
+        // Synthetic refusal: no refused setting command occurred in the capture.
+        for (const reply of ['aa08300024035cbb', 'aa083000241043bb', 'aa083000241142bb']) {
+            dev.setProperty('keep_remote_start', 'ON')
+            thinq.emit('data', buf(reply))
+            assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+            assert.equal(ha.devices[DEVICE_ID].properties.problem, 'ON')
+        }
+        thinq.emit('data', REMOTE_MAINTAIN_REPLY) // no pending command
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'None')
+        dev.drop()
     })
 
     test('the standby clock switch writes prop 0x58 and reads rec[28] bit 0x20', () => {
@@ -1373,6 +1463,137 @@ describe('BDVG_FX0003_US remote maintain', () => {
         const second = makeDevice()
         second.dev.setProperty('current_time_display', 'OFF')
         assert.deepEqual(second.thinq.outbox.map(hex), [hex(W_CLOCK_OFF)])
+    })
+})
+
+// User-supplied DLEX6700B packet excerpts, 2026-11-11; only appliance status bytes, no identities.
+// All EC frames independently pass length 102 / payload 84 / CRC16-XMODEM checks.
+// Panel Remote Start arming isolates rec26 mask40; rec24 mask20 is drum light, not arming.
+// Keep Remote Start OFF/ON requests were accepted; user observed arming stayed ON. These
+// captures establish end-state behavior, not persisted physical setting/readback. User reported
+// Fan during Cooling, Remote still on at completion, and KeepFresh after activating it.
+// Pause then reported Off; its physical outcome was not supplied. Door opening independently
+// clears only rec26 mask40 in armed Standby. Status labels remain the existing model labels.
+const NOV11 = {
+    PANEL_LIGHT: buf(
+        'aaff300a00660002dc000100ec00540003000400070000000029002901000002000003030000000000008103000000040800000000000000000003000400070000000029002901000002000003030000002000008103000000040800000000000000005978bb',
+    ), // EC 0x02dc
+    PANEL_ARMED: buf(
+        'aaff300a00660002e2000100ec0054000300040007000000002900290100000200000303000000200000810300000004080000000000000000000300040007000000002900290100000200000303000000200040810300000004080000000000000000d60cbb',
+    ), // EC 0x02e2
+    ARMED_TOWELS: buf(
+        'aaff300a006600030f000100ec005400030004000700000000290029010000020000030300000020004081030000000408000000000000000000030004000200000000370037010000020000030200000020004081030000000408000000000000000019cebb',
+    ), // EC 0x030f
+    FIVE_MIN_DRYING: buf(
+        'aaff300a006600032e000100ec005400010002000a00000000050005010000020000030500000000004081030000000408000000000000000000010002000a000000000500050701000200000305000000000040810300000004080000000000000000c434bb',
+    ), // EC 0x032e
+    FAN: buf(
+        'aaff300a0066000385000100ec005400010002000a00000000040005070100020055030500000000004081030000000408000000000000000000010002000a0000000001000208070005005d0305000000000040810300000004080000000000000000d84cbb',
+    ), // EC 0x0385
+    REMOTE_STILL_ON: buf(
+        'aaff300a0066000396000100ec005400010002000a0000000001000308070005005f030500000000004081030000000408000000000000000000010002000a0000000001000316080007006003050000002000408303000000040800000000000000009378bb',
+    ), // EC 0x0396
+    KEEP_FRESH: buf(
+        'aaff300a00660003aa000100ec005400010002000a00000000010003160800070060030500000020004083030000000408000000000000000000010002000a0000000001000318160007006003050000002000408113000000040800000000000000009b49bb',
+    ), // EC 0x03aa
+    PANEL_PAUSE: buf(
+        'aaff300a00660003c3000100ec005400010002000a000000000100031816000700600305000000200040811300000004080000000000000000000000000000000000000100010018000200600300000000200000810300000004080000000000000000ea0abb',
+    ), // EC 0x03c3
+    AFTER_SETTING_OFF: buf(
+        'aaff300a00660003dc000100ec0054000500030004000000004100410100000200600307000000200000810300000004080000000000000000000300040007000000002900290100000200600303000000200000810300000004080000000000000000d561bb',
+    ), // EC 0x03dc
+    AFTER_SETTING_ON: buf(
+        'aaff300a00660003e6000100ec0054000300040007000000002900290100000200600303000000200000810300000004080000000000000000000500030004000000004100410100000200600307000000200000810300000004080000000000000000f988bb',
+    ), // EC 0x03e6
+    DOOR_CANCEL: buf(
+        'aaff300a0066000417000100ec0054000500030004000000004100410100000200600307000000200040810300000004080000000000000000000500030004000000004100410100000200600307000000200000810300000004080000000000000000eca5bb',
+    ), // EC 0x0417
+}
+
+describe('BDVG_FX0003_US November 11 user observations', () => {
+    test('panel arming and opening the door change Remote Start, not the setting or end-state', () => {
+        const { ha, thinq, dev } = makeDevice()
+        const p = () => ha.devices[DEVICE_ID].properties
+        thinq.emit('data', NOV11.PANEL_LIGHT)
+        assert.equal(p().remote_start, 'OFF')
+        assert.equal(p().drum_light, 'ON')
+        thinq.emit('data', NOV11.PANEL_ARMED)
+        assert.equal(p().remote_start, 'ON')
+        thinq.emit('data', NOV11.DOOR_CANCEL)
+        assert.equal(p().remote_start, 'OFF')
+        assert.equal(p().power, 'ON')
+        assert.equal(p().status, 'Initial')
+        assert.equal(p().remote_maintain, 'OFF')
+        assert.equal(p().keep_remote_start, 'None')
+        // Door cancellation report changes only the arming bit, not the stored setting.
+        const previous = NOV11.DOOR_CANCEL.subarray(15, 57)
+        const current = NOV11.DOOR_CANCEL.subarray(57, 99)
+        assert.deepEqual(
+            [...current.keys()].filter((i) => current[i] !== previous[i]),
+            [26],
+        )
+        dev.drop()
+    })
+
+    test('accepted setting stays separate from completion, KeepFresh and panel Pause', () => {
+        const { ha, thinq, dev } = makeDevice()
+        const p = () => ha.devices[DEVICE_ID].properties
+        dev.setProperty('keep_remote_start', 'ON')
+        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        for (const [frame, status] of [
+            [NOV11.ARMED_TOWELS, 'Initial'],
+            [NOV11.FIVE_MIN_DRYING, 'Drying'],
+            [NOV11.FAN, 'Cooling'],
+        ] as const) {
+            thinq.emit('data', frame)
+            assert.equal(p().status, status)
+            assert.equal(p().remote_start, 'ON')
+            assert.equal(p().remote_maintain, 'OFF')
+            assert.equal(p().keep_remote_start, 'ON')
+        }
+        thinq.emit('data', NOV11.REMOTE_STILL_ON)
+        assert.equal(p().status, 'End remote maintain on')
+        assert.equal(p().remote_start, 'ON')
+        assert.equal(p().remote_maintain, 'ON')
+        // User activated KeepFresh: captured property57=1 and successful E6 reply.
+        dev.setProperty('keep_fresh', 'ON')
+        assert.equal(hex(thinq.outbox[thinq.outbox.length - 1]), 'AA0DF0E5000201FF015701B2BB')
+        thinq.emit(
+            'data',
+            buf(
+                'aa3730e6000201ff01570000010002000a000000000100031608000700600305000000200040811300000004080000000000000000babb',
+            ),
+        )
+        thinq.emit('data', NOV11.KEEP_FRESH)
+        assert.equal(p().status, 'Laundry care')
+        assert.equal(p().remote_maintain, 'OFF')
+        assert.equal(p().remote_start, 'ON')
+        assert.equal(p().keep_fresh, 'ON')
+        thinq.emit('data', NOV11.PANEL_PAUSE)
+        assert.equal(p().status, 'Off')
+        assert.equal(p().remote_start, 'OFF')
+        assert.equal(p().keep_fresh, 'OFF')
+        assert.equal(p().remote_maintain, 'OFF')
+        assert.equal(p().keep_remote_start, 'ON') // last accepted request, not persisted-setting proof
+        dev.drop()
+    })
+
+    test('same-course OFF/ON excerpts contain no distinguishing setting field', () => {
+        const { ha, thinq, dev } = makeDevice()
+        // Previous Bedding record after accepted OFF vs current Bedding record after accepted ON.
+        // This comparison says nothing about other message families or later timing.
+        assert.deepEqual(NOV11.AFTER_SETTING_OFF.subarray(15, 57), NOV11.AFTER_SETTING_ON.subarray(57, 99))
+        dev.setProperty('keep_remote_start', 'OFF')
+        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        thinq.emit('data', NOV11.AFTER_SETTING_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'OFF')
+        dev.setProperty('keep_remote_start', 'ON')
+        thinq.emit('data', REMOTE_MAINTAIN_REPLY)
+        thinq.emit('data', NOV11.AFTER_SETTING_ON)
+        assert.equal(ha.devices[DEVICE_ID].properties.keep_remote_start, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_start, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_maintain, 'OFF')
+        dev.drop()
     })
 })
 

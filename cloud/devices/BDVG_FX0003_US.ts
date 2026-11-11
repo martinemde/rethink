@@ -102,9 +102,10 @@ const WRITE_REFUSED = 0x03
 const WRITE_OK = new Set([0x00, 0x10, 0x11])
 
 // The LG cloud's commands (f0 24 <command> 01 <value>), and the dryer's reply to one:
-// 30 00 24 <result>. Only the cloud sends them, but a write from HA waits for their reply too.
+// 30 00 24 <result>. Writes from HA share the queue with tracked cloud commands.
 const COMMAND_TYPE = 0x24
 const COMMAND_REPLY_TYPE = 0x00
+const SET_KEEP_REMOTE_START = Buffer.from([0xf0, COMMAND_TYPE, 0x10, 0x01])
 
 const EVENT_FRAME_TYPE = 0x03
 // The following two bytes are a cycle counter, not part of the event signature.
@@ -150,10 +151,8 @@ const OPT3_REMOTE_START = 0x40
 
 const OPT4_OFFSET = 27
 const OPT4_CYCLE_OPTIMIZATION = 0x01
-// The dryer sits in End remote maintain on: Keep Remote Start On, as the ThinQ app calls it (the cloud's
-// remoteMaintain). The cloud's f0 24 10 01 01 (sent on every reconnect and at each cycle start) is acknowledged
-// in any state. A cycle that gets it at its start ends this way, whether or not Remote Start was armed at the
-// panel. The bit shows the state, never the setting, so it is a sensor.
+// Record 27 bit 0x02 describes End remote maintain on, not the stored setting. A cycle can end
+// this way even without Remote Start armed at the panel; it is not setting readback.
 const OPT4_REMOTE_MAINTAIN = 0x02
 
 const OPT5_OFFSET = 28
@@ -541,9 +540,18 @@ export default class Device extends AABBDevice {
                         platform: 'binary_sensor',
                         unique_id: '$deviceid-remote_maintain',
                         state_topic: '$this/remote_maintain',
-                        name: 'Keep Remote Start On',
+                        name: 'Remote maintain',
                         icon: 'mdi:cellphone-wireless',
                         entity_category: 'diagnostic',
+                    },
+                    keep_remote_start: {
+                        platform: 'switch',
+                        unique_id: '$deviceid-keep_remote_start',
+                        state_topic: '$this/keep_remote_start',
+                        command_topic: '$this/keep_remote_start/set',
+                        name: 'Keep Remote Start',
+                        icon: 'mdi:cellphone-wireless',
+                        entity_category: 'config',
                     },
                     problem: {
                         platform: 'binary_sensor',
@@ -564,6 +572,8 @@ export default class Device extends AABBDevice {
                 },
             }),
         )
+        // No status bit is established: only a matched successful command confirms this setting.
+        this.publishProperty('keep_remote_start', undefined)
     }
 
     // A finish retry at startup is not a new completion. No lifecycle is persisted.
@@ -680,6 +690,9 @@ export default class Device extends AABBDevice {
                 return
             if (this.course?.on && this.course.code !== COURSE_TIMED_DRY) return this.setProblem(DRY_TIME_REASON)
             this.writeBundle('dry_time', minutes)
+        } else if (prop === 'keep_remote_start') {
+            if (value === 'ON' || value === 'OFF')
+                this.queueWrite(() => Buffer.concat([SET_KEEP_REMOTE_START, Buffer.from([value === 'ON' ? 1 : 0])]))
         } else if (prop === 'current_time_display') {
             if (value === 'ON' || value === 'OFF') this.writeProps(PROP_CURRENT_TIME_DISPLAY, value === 'ON' ? 1 : 0)
         } else if (prop === 'cycle_optimization' || prop === 'keep_fresh') {
@@ -700,11 +713,29 @@ export default class Device extends AABBDevice {
         }
     }
 
+    processData(buf: Buffer) {
+        // The shared decoder does not validate checksums. Never confirm this command from a corrupt reply.
+        if (buf[2] === CLASS_BYTE && buf[3] === COMMAND_REPLY_TYPE && buf[4] === COMMAND_TYPE) {
+            if (!AABBDevice.frame(buf.subarray(2, -2)).equals(buf)) return
+        }
+        super.processData(buf)
+    }
+
     processAABB(buf: Buffer) {
         if (buf.length < 2 || buf[0] !== CLASS_BYTE) return
         if (buf[1] === WRITE_REPLY_TYPE) return this.processWriteReply(buf)
-        if (buf[1] === COMMAND_REPLY_TYPE && buf[2] === COMMAND_TYPE) {
-            this.writeAnswered(COMMAND_TYPE)
+        if (buf.length === 4 && buf[1] === COMMAND_REPLY_TYPE && buf[2] === COMMAND_TYPE) {
+            const write = this.writeAnswered(COMMAND_TYPE)
+            if (
+                !write ||
+                write.inner.length !== 5 ||
+                !write.inner.subarray(0, 4).equals(SET_KEEP_REMOTE_START) ||
+                write.inner[4] > 1
+            )
+                return
+            const result = buf[3]
+            if (result === 0) this.publishProperty('keep_remote_start', onOff(write.inner[4] === 1))
+            if (write.own) this.setProblem(result === 0 ? undefined : `Command refused (0x${hex2(result)})`)
             return
         }
         if (buf.length < 13 || buf[1] !== ENVELOPE_TYPE) return
