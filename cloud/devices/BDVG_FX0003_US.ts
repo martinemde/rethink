@@ -332,6 +332,17 @@ export default class Device extends AABBDevice {
                         name: 'Course',
                         icon: 'mdi:tumble-dryer',
                     },
+                    course_recommendation: {
+                        platform: 'select',
+                        unique_id: '$deviceid-course_recommendation',
+                        command_topic: '$this/course_recommendation/set',
+                        retain: false,
+                        optimistic: true,
+                        options: COURSE.options,
+                        name: 'Course recommendation',
+                        icon: 'mdi:tumble-dryer',
+                        entity_category: 'config',
+                    },
                     start: {
                         platform: 'button',
                         unique_id: '$deviceid-start',
@@ -960,7 +971,7 @@ export default class Device extends AABBDevice {
         } else if (prop === 'splash_screen') {
             const idx = SPLASH_SCREEN.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_SPLASH_SCREEN, idx)
-        } else if (prop === 'smart_pairing') {
+        } else if (prop === 'course_recommendation' || prop === 'smart_pairing') {
             const code = COURSE.unmap(value)
             if (code !== undefined) this.writeSmartPairing(code)
         } else if (prop === 'course') {

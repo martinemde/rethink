@@ -2569,7 +2569,49 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
         return AABBDevice.frame(inner)
     }
 
-    test('idle including silent Off accepts exact labels and encoding without a discovery entity or state', (t) => {
+    test('course recommendation discovery exposes built-in courses without a reported selection', () => {
+        const { ha, dev } = makeDevice()
+        const config = ha.devices[DEVICE_ID].config!.components.course_recommendation
+        assert.deepEqual(config, {
+            platform: 'select',
+            unique_id: '$deviceid-course_recommendation',
+            command_topic: '$this/course_recommendation/set',
+            retain: false,
+            optimistic: true,
+            options: [
+                'AI Dry',
+                'Timed Dry',
+                'Bedding',
+                'Steam Sanitary',
+                'Towels',
+                'Delicates',
+                'Normal',
+                'Quick Dry',
+                'Power Dry',
+                'Steam Fresh',
+                'Air Dry',
+                'Jeans',
+                'Blanket Refresh',
+                'Perm. Press',
+                'Heavy Duty',
+                'Super Dry',
+                'Active Wear',
+                'Low Temp Dry',
+                'Overnight Dry',
+                'Easy Ironing',
+                'Small Load',
+                'Large Load Dry',
+                'X Large Load Dry',
+            ],
+            name: 'Course recommendation',
+            icon: 'mdi:tumble-dryer',
+            entity_category: 'config',
+        })
+        assert.equal(ha.devices[DEVICE_ID].properties.course_recommendation, undefined)
+        dev.drop()
+    })
+
+    test('idle including silent Off accepts recommendation labels without changing reported course or state', (t) => {
         t.mock.timers.enable({ apis: ['Date'] })
         for (const state of [0, 1, 4, 22]) {
             const { ha, thinq, dev } = makeDevice()
@@ -2583,7 +2625,7 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
                 ['AI Dry', 44],
             ] as const) {
                 const before = { ...ha.devices[DEVICE_ID].properties }
-                dev.setProperty('smart_pairing', label)
+                dev.setProperty('course_recommendation', label)
                 const write = thinq.outbox[thinq.outbox.length - 1]
                 assert.deepEqual(
                     write,
@@ -2611,16 +2653,16 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
 
     test('absent, active, paused, unknown and dropped contexts reject; downloaded and invalid labels never send', () => {
         const { thinq, dev } = makeDevice()
-        dev.setProperty('smart_pairing', 'Normal')
+        dev.setProperty('course_recommendation', 'Normal')
         for (const state of [2, 3, 5, 7, 8, 9, 10, 14, 23, 24, 255]) {
             thinq.onData(status(state))
-            dev.setProperty('smart_pairing', 'Normal')
+            dev.setProperty('course_recommendation', 'Normal')
         }
         thinq.onData(status(0))
         for (const value of ['', '7', 'normal', 'Normal ', 'Rack Dry', 'Wrinkle Prevention', 'ON'])
-            dev.setProperty('smart_pairing', value)
+            dev.setProperty('course_recommendation', value)
         dev.drop()
-        dev.setProperty('smart_pairing', 'Normal')
+        dev.setProperty('course_recommendation', 'Normal')
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(
             thinq.sent.filter((m) => m.cmd !== 'ack'),

@@ -325,6 +325,11 @@ acceptance are separately owned by the parent operator.
 
 ## Confirmed dryer Smart Pairing command (2026-11-08)
 
+The later `course_recommendation` Configuration select exposes this command in
+Home Assistant. Its optimistic selection is only the last request, initially
+unknown; it does not represent a pending recommendation. The original MQTT route
+below remains supported. There is no automatic reset.
+
 `smart_pairing/set` is command-only, using the existing non-retained MQTT command
 route; see README for exact topic, labels and last-reported idle gate. The body is
 `F0 E5 00 01 01 FF 02 3D 01 0A <course>`, distinct from normal course-setting

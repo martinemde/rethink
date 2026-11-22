@@ -173,11 +173,18 @@ See also the [Home Assistant App](https://github.com/anszom/rethink-ha/tree/mast
 
 ## Dryer Smart Pairing command
 
-For BDVG_FX0003_US, publish a non-retained course label to
-`rethink/<id>/smart_pairing/set` (replace `rethink` if the MQTT prefix is configured
-otherwise). Example payload: `Towels`. This command only recommends a course; it
-does not select the current course, power on, start, or pair automatically after a
-washer finishes. There is no discovery entity or pending-pairing state/readback.
+For BDVG_FX0003_US, the **Course recommendation** Configuration select sends a
+Smart Pairing recommendation. It starts unknown until first selected. Home
+Assistant optimistically displays the last requested course and may restore it
+after a Home Assistant restart; this is not readback from the dryer. There is no
+automatic reset or pending-recommendation state.
+
+Automations can use `select.select_option`, or publish a non-retained course label
+to `rethink/<id>/course_recommendation/set` (replace `rethink` if the MQTT prefix is
+configured otherwise). The existing `rethink/<id>/smart_pairing/set` command is
+also supported. Example payload: `Towels`. This command only recommends a course;
+it does not select the current course, power on, start, or pair automatically
+after a washer finishes.
 
 Payloads are exact, case-sensitive existing dryer course labels:
 AI Dry, Timed Dry, Bedding, Steam Sanitary, Towels, Delicates, Normal, Quick Dry,
