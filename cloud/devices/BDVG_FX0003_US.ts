@@ -67,6 +67,8 @@ const PROP_MELODY = 0x50
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_KEEP_FRESH = 0x57
 const PROP_CURRENT_TIME_DISPLAY = 0x58 // modelJSON currentTimeDisplay
+const PROP_TIME_FORMAT = 0x59
+const PROP_DATE_DISPLAY = 0x5a
 
 const COURSE_DOWNLOADED = 0xff
 const CYCLE = Enum.of({ start: 1, pause: 2, resume: 3 })
@@ -161,6 +163,8 @@ const OPT5_KEEP_FRESH = 0x10
 // The standby screen's clock. The clock is a ThinQ UP feature: content DR-9 in the dryer's 0x86
 // content list. Without it installed the setting still switches, and the screen shows --:--.
 const OPT5_CURRENT_TIME_DISPLAY = 0x20
+const OPT5_TIME_FORMAT = 0x40
+const OPT5_DATE_DISPLAY = 0x80
 
 const STATE_POWEROFF = 0
 
@@ -483,6 +487,30 @@ export default class Device extends AABBDevice {
                         name: 'KeepFresh',
                         icon: 'mdi:rotate-3d-variant',
                     },
+                    time_format: {
+                        platform: 'switch',
+                        device_class: 'switch',
+                        unique_id: '$deviceid-time_format',
+                        state_topic: '$this/time_format',
+                        command_topic: '$this/time_format/set',
+                        retain: false,
+                        optimistic: false,
+                        name: 'Clock 24 hour',
+                        icon: 'mdi:clock-outline',
+                        entity_category: 'config',
+                    },
+                    date_display: {
+                        platform: 'switch',
+                        device_class: 'switch',
+                        unique_id: '$deviceid-date_display',
+                        state_topic: '$this/date_display',
+                        command_topic: '$this/date_display/set',
+                        retain: false,
+                        optimistic: false,
+                        name: 'Clock date display',
+                        icon: 'mdi:calendar',
+                        entity_category: 'config',
+                    },
                     current_time_display: {
                         platform: 'switch',
                         unique_id: '$deviceid-current_time_display',
@@ -597,9 +625,20 @@ export default class Device extends AABBDevice {
     // Changes from HA not yet sent, which a record arriving before they go out must not undo
     private readonly unsent = new Map<BundleKey, number>()
 
+    // Only passive status enables these settings, not an accepted Clock on standby command.
+    private clockSettingsAvailable = false
+
+    private clockSettingAllowed(prop: number) {
+        if (prop !== PROP_TIME_FORMAT && prop !== PROP_DATE_DISPLAY) return true
+        if (this.clockSettingsAvailable && this.course?.on) return true
+        this.setProblem('Command needs powered-on status with Clock on standby enabled')
+        return false
+    }
+
     private writeProps(...pairs: number[]) {
+        if (!this.clockSettingAllowed(pairs[0])) return
         const inner = Buffer.from([...SET_PROPERTY, pairs.length / 2, ...pairs])
-        this.queueWrite(() => inner)
+        this.queueWrite(() => (this.clockSettingAllowed(pairs[0]) ? inner : undefined))
     }
 
     protected writeType(inner: Buffer) {
@@ -685,6 +724,9 @@ export default class Device extends AABBDevice {
         } else if (prop === 'cycle_optimization' || prop === 'keep_fresh') {
             if (value !== 'ON' && value !== 'OFF') return
             this.writeProps(prop === 'keep_fresh' ? PROP_KEEP_FRESH : PROP_CYCLE_OPTIMIZATION, value === 'ON' ? 1 : 0)
+        } else if (prop === 'time_format' || prop === 'date_display') {
+            if (value === 'ON' || value === 'OFF')
+                this.writeProps(prop === 'time_format' ? PROP_TIME_FORMAT : PROP_DATE_DISPLAY, value === 'ON' ? 1 : 0)
         } else if (prop === 'melody') {
             const idx = ENDING_MELODY.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_MELODY, idx)
@@ -768,6 +810,14 @@ export default class Device extends AABBDevice {
         const accepted = (prop: number) => WRITE_OK.has(results.get(prop) ?? WRITE_REFUSED)
 
         const recordAt = WRITE_REPLY_PROP_OFFSET + 2 * count
+        if (reply.length === recordAt + RECORD_LEN) {
+            // Read the actual reply record, never echo the requested setting.
+            const rec = reply.subarray(recordAt)
+            if (accepted(PROP_TIME_FORMAT))
+                this.publishProperty('time_format', onOff((rec[OPT5_OFFSET] & OPT5_TIME_FORMAT) !== 0))
+            if (accepted(PROP_DATE_DISPLAY))
+                this.publishProperty('date_display', onOff((rec[OPT5_OFFSET] & OPT5_DATE_DISPLAY) !== 0))
+        }
         if ((accepted(PROP_COURSE) || accepted(PROP_CYCLE_OPTIMIZATION)) && reply.length >= recordAt + RECORD_LEN)
             this.takeInCourse(reply.subarray(recordAt, recordAt + RECORD_LEN))
 
@@ -787,7 +837,10 @@ export default class Device extends AABBDevice {
     // After a remote power change the dryer may send no record, only these events.
     private processEvent(payload: Buffer) {
         const on = payload[EVENT_POWER_OFFSET] !== 0
-        if (!on) this.completionState = 'unarmed'
+        if (!on) {
+            this.completionState = 'unarmed'
+            this.clockSettingsAvailable = false
+        }
         if (!on && this.course) this.course = { ...this.course, on: false }
         this.publishProperty('power', onOff(on))
         if (payload[EVENT_ID_OFFSET] === EVENT_ID_DOOR)
@@ -821,6 +874,7 @@ export default class Device extends AABBDevice {
         if ([0, 1].includes(state)) this.completionState = 'unarmed'
         else if (this.completionState !== 'completed' && [7, 8].includes(state)) this.completionState = 'armed'
         const isOff = state === STATE_POWEROFF
+        this.clockSettingsAvailable = !isOff && (rec[OPT5_OFFSET] & OPT5_CURRENT_TIME_DISPLAY) !== 0
         this.takeInCourse(rec)
         this.bundle.set('steam', bit(rec[OPT2_OFFSET], OPT2_STEAM))
         this.bundle.set('damp_dry_signal', bit(rec[OPT1_OFFSET], OPT1_DAMP_DRY_SIGNAL))
@@ -846,6 +900,8 @@ export default class Device extends AABBDevice {
         this.publishProperty('remote_maintain', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_MAINTAIN) !== 0))
         this.publishProperty('keep_fresh', onOff((rec[OPT5_OFFSET] & OPT5_KEEP_FRESH) !== 0))
         this.publishProperty('current_time_display', onOff((rec[OPT5_OFFSET] & OPT5_CURRENT_TIME_DISPLAY) !== 0))
+        this.publishProperty('time_format', onOff((rec[OPT5_OFFSET] & OPT5_TIME_FORMAT) !== 0))
+        this.publishProperty('date_display', onOff((rec[OPT5_OFFSET] & OPT5_DATE_DISPLAY) !== 0))
         this.publishProperty('melody', ENDING_MELODY.map(rec[MELODY_OFFSET]))
         this.publishProperty('splash_screen', SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]))
     }

@@ -1036,6 +1036,8 @@ describe('FAFXU22007', () => {
             quick_load_sense: 'ON',
             splash_screen: 'Normal',
             current_time_display: 'OFF',
+            time_format: 'OFF',
+            date_display: 'OFF',
             melody: 'Normal',
         })
     })
@@ -1914,5 +1916,125 @@ describe('FAFXU22007 completion notifications', () => {
         assert.equal(events().length, 0)
         thinq.emit('data', completionNotification())
         assert.equal(events().length, 1)
+    })
+})
+
+describe('FAFXU22007 clock controls', () => {
+    const controls: [string, number, number, string][] = [
+        ['time_format', 0x59, 0x02, 'Clock 24 hour'],
+        ['date_display', 0x5a, 0x04, 'Clock date display'],
+    ]
+
+    // Synthetic mutations of captured reports isolate clock bits and power/visibility gates.
+    function syntheticClockReport(source: Buffer, bits: number, visible = true, powered = true) {
+        const frame = Buffer.from(source)
+        const record = frame[3] === 0xe6 ? 11 : 15 + (frame[12] === 0xec ? 51 : 0)
+        frame[record + 21] = powered ? 1 : 0
+        frame[record + 47] = (frame[record + 47] & ~0x80) | (visible ? 0x80 : 0)
+        frame[record + 49] = (frame[record + 49] & ~(0x02 | 0x04)) | bits
+        if (frame[1] === 0xff) frame.writeUInt16BE(crc16(frame.subarray(0, -3)), frame.length - 3)
+        else frame[frame.length - 2] = (frame.subarray(0, -2).reduce((sum, byte) => sum + byte, 0) & 0xff) ^ 0x55
+        return frame
+    }
+
+    test('clock switches keep their names, command topics and non-optimistic state', () => {
+        const { ha, dev } = makeDevice()
+        dev.publishConfig()
+        const c = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        for (const [key, , , name] of controls) {
+            assert.equal(c[key].platform, 'switch')
+            assert.equal(c[key].name, name)
+            assert.equal(c[key].command_topic, `$this/${key}/set`)
+            assert.notEqual(c[key].optimistic, true)
+        }
+        assert.equal(c.current_time_display.name, 'Clock on standby')
+        assert.equal(c.current_time_display.command_topic, '$this/current_time_display/set')
+    })
+
+    test('EB and EC read clock bits independently of each other and visibility', () => {
+        for (const source of [EB_IDLE, CHIME_LOW]) {
+            for (const bits of [0, 0x02, 0x04, 0x02 | 0x04]) {
+                const p = feed([syntheticClockReport(source, bits, false)])
+                assert.equal(p.time_format, bits & 0x02 ? 'ON' : 'OFF')
+                assert.equal(p.date_display, bits & 0x04 ? 'ON' : 'OFF')
+                assert.equal(p.current_time_display, 'OFF')
+            }
+        }
+    })
+
+    test('each direction sends one property only, without a query or optimistic echo', () => {
+        for (const [key, prop, mask] of controls) {
+            for (const value of ['ON', 'OFF']) {
+                const { ha, thinq, dev } = makeDevice()
+                thinq.emit('data', syntheticClockReport(EB_IDLE, value === 'ON' ? 0 : mask))
+                const before = { ...ha.devices[DEVICE_ID].properties }
+                dev.setProperty(key, value)
+                assert.equal(thinq.outbox.length, 1)
+                assert.equal(thinq.outbox[0][8], 1)
+                assert.equal(
+                    thinq.outbox[0].subarray(9, -2).toString('hex'),
+                    `${prop.toString(16)}0${value === 'ON' ? 1 : 0}`,
+                )
+                assert.deepEqual(ha.devices[DEVICE_ID].properties, before)
+            }
+        }
+    })
+
+    test('invalid, absent, powered-off and hidden clock requests send nothing', () => {
+        for (const [key] of controls) {
+            for (const report of [
+                undefined,
+                syntheticClockReport(EB_IDLE, 0, true, false),
+                syntheticClockReport(EB_IDLE, 0, false),
+            ]) {
+                const { thinq, dev } = makeDevice()
+                if (report) thinq.emit('data', report)
+                dev.setProperty(key, 'ON')
+                assert.deepEqual(thinq.outbox, [])
+            }
+            const { thinq, dev } = makeDevice()
+            thinq.emit('data', syntheticClockReport(EB_IDLE, 0))
+            for (const value of ['TOGGLE', '24h', '1', '']) dev.setProperty(key, value)
+            assert.deepEqual(thinq.outbox, [])
+        }
+    })
+
+    test('a queued clock write is dropped if a report hides the clock before dispatch', () => {
+        for (const [key] of controls) {
+            const { thinq, dev } = makeDevice()
+            thinq.emit('data', syntheticClockReport(EB_IDLE, 0))
+            dev.setProperty('buzzer', 'Off')
+            dev.setProperty(key, 'ON')
+            assert.equal(thinq.outbox.length, 1)
+            thinq.emit('data', syntheticClockReport(EB_IDLE, 0, false))
+            thinq.emit('data', syntheticClockReport(E6_REPLY, 0, false))
+            assert.equal(thinq.outbox.length, 1)
+        }
+    })
+
+    test('a visible clock in E6 alone cannot unlock clock controls', () => {
+        const { thinq, dev } = makeDevice()
+        dev.setProperty('buzzer', 'Off')
+        thinq.emit('data', syntheticClockReport(E6_REPLY, 0))
+        for (const [key] of controls) dev.setProperty(key, 'ON')
+        assert.equal(thinq.outbox.length, 1)
+    })
+
+    test('accepted clock replies publish the actual reported bit, not the requested value', () => {
+        for (const [key, prop, mask] of controls) {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', syntheticClockReport(EB_IDLE, 0))
+            dev.setProperty(key, 'ON')
+            const reply = syntheticClockReport(E6_REPLY, 0)
+            reply[9] = prop
+            reply[10] = 0
+            reply[reply.length - 2] = (reply.subarray(0, -2).reduce((sum, byte) => sum + byte, 0) & 0xff) ^ 0x55
+            thinq.emit('data', reply)
+            assert.equal(ha.devices[DEVICE_ID].properties[key], 'OFF')
+            dev.setProperty(key, 'OFF')
+            const onReply = syntheticClockReport(reply, mask)
+            thinq.emit('data', onReply)
+            assert.equal(ha.devices[DEVICE_ID].properties[key], 'ON')
+        }
     })
 })

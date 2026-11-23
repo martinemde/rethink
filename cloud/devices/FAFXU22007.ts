@@ -85,6 +85,8 @@ const PROP_MELODY = 0x50
 const PROP_SPLASH_SCREEN = 0x51
 const PROP_QUICK_LOAD_SENSE = 0x56
 const PROP_CURRENT_TIME_DISPLAY = 0x58 // modelJSON currentTimeDisplay
+const PROP_TIME_FORMAT = 0x59
+const PROP_DATE_DISPLAY = 0x5a
 
 const COURSE_DOWNLOADED = 0xff
 const CYCLE = Enum.of({ start: 1, pause: 2, resume: 3 })
@@ -179,6 +181,9 @@ const NOZZLE_CLEAN_MASK = 0x60
 // then shows --:--.
 const CURRENT_TIME_DISPLAY_OFFSET = 47
 const CURRENT_TIME_DISPLAY_MASK = 0x80
+const CLOCK_SETTINGS_OFFSET = 49
+const TIME_FORMAT_MASK = 0x02
+const DATE_DISPLAY_MASK = 0x04
 
 const OPT1_OFFSET = 34
 const OPT1_COLD_WASH = 0x04
@@ -672,6 +677,30 @@ export default class Device extends AABBDevice {
                         icon: 'mdi:scale',
                         entity_category: 'config',
                     },
+                    time_format: {
+                        platform: 'switch',
+                        device_class: 'switch',
+                        unique_id: '$deviceid-time_format',
+                        state_topic: '$this/time_format',
+                        command_topic: '$this/time_format/set',
+                        retain: false,
+                        optimistic: false,
+                        name: 'Clock 24 hour',
+                        icon: 'mdi:clock-outline',
+                        entity_category: 'config',
+                    },
+                    date_display: {
+                        platform: 'switch',
+                        device_class: 'switch',
+                        unique_id: '$deviceid-date_display',
+                        state_topic: '$this/date_display',
+                        command_topic: '$this/date_display/set',
+                        retain: false,
+                        optimistic: false,
+                        name: 'Clock date display',
+                        icon: 'mdi:calendar',
+                        entity_category: 'config',
+                    },
                     current_time_display: {
                         platform: 'switch',
                         unique_id: '$deviceid-current_time_display',
@@ -776,9 +805,20 @@ export default class Device extends AABBDevice {
         this.publishProperty('problem_reason', this.problem ?? 'OK')
     }
 
+    // Only passive status enables these settings, not an accepted Clock on standby command.
+    private clockSettingsAvailable = false
+
+    private clockSettingAllowed(prop: number) {
+        if (prop !== PROP_TIME_FORMAT && prop !== PROP_DATE_DISPLAY) return true
+        if (this.clockSettingsAvailable && this.course?.on) return true
+        this.setProblem('Command needs powered-on status with Clock on standby enabled')
+        return false
+    }
+
     private writeProps(...pairs: number[]) {
+        if (!this.clockSettingAllowed(pairs[0])) return
         const inner = Buffer.from([...SET_PROPERTY, pairs.length / 2, ...pairs])
-        this.queueWrite(() => inner)
+        this.queueWrite(() => (this.clockSettingAllowed(pairs[0]) ? inner : undefined))
     }
 
     private writeCommand(command: number, value: number) {
@@ -868,6 +908,9 @@ export default class Device extends AABBDevice {
             this.writeProps(p, value === 'ON' ? 1 : 0)
         } else if (prop === 'remote_maintain') {
             if (value === 'ON' || value === 'OFF') this.writeCommand(COMMAND_REMOTE_MAINTAIN, value === 'ON' ? 1 : 0)
+        } else if (prop === 'time_format' || prop === 'date_display') {
+            if (value === 'ON' || value === 'OFF')
+                this.writeProps(prop === 'time_format' ? PROP_TIME_FORMAT : PROP_DATE_DISPLAY, value === 'ON' ? 1 : 0)
         } else if (prop === 'melody') {
             const idx = ENDING_MELODY.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_MELODY, idx)
@@ -894,7 +937,7 @@ export default class Device extends AABBDevice {
             const failed = results.find((result) => result !== undefined && !WRITE_OK.has(result))
             if (own) this.setProblem(failed === undefined ? undefined : `Command refused (0x${hex2(failed)})`)
             if (results.includes(WRITE_REFUSED) || results.includes(WRITE_BUSY)) return
-            return this.processStatus(buf, recordOffset, recordOffset + RECORD_LEN)
+            return this.processStatus(buf, recordOffset, recordOffset + RECORD_LEN, false)
         }
         if (buf.length < 13 || buf[1] !== ENVELOPE_TYPE) return
 
@@ -934,7 +977,7 @@ export default class Device extends AABBDevice {
         this.publishProperty('door', door === DOOR_OPEN ? 'ON' : 'OFF')
     }
 
-    private processStatus(buf: Buffer, recordOffset: number, expectedLen: number) {
+    private processStatus(buf: Buffer, recordOffset: number, expectedLen: number, passive = true) {
         if (buf.length !== expectedLen) return
         const rec = buf.subarray(recordOffset, recordOffset + RECORD_LEN)
 
@@ -943,6 +986,8 @@ export default class Device extends AABBDevice {
         else if (this.completionState !== 'completed' && [11, 12, 14, 41, 48].includes(state))
             this.completionState = 'armed'
         const isOff = state === STATE_POWEROFF
+        if (passive)
+            this.clockSettingsAvailable = !isOff && (rec[CURRENT_TIME_DISPLAY_OFFSET] & CURRENT_TIME_DISPLAY_MASK) !== 0
         const course = rec[COURSE_OFFSET]
 
         this.course = { code: course, loaded: rec[LOADED_COURSE_OFFSET], on: !isOff }
@@ -992,6 +1037,8 @@ export default class Device extends AABBDevice {
         this.publishProperty('remote_start', onOff((rec[OPT4_OFFSET] & OPT4_REMOTE_START) !== 0))
         this.publishProperty('drawer', onOff((rec[OPT5_OFFSET] & OPT5_DRAWER_CLOSED) === 0))
         this.publishProperty('quick_load_sense', onOff((rec[OPT7_OFFSET] & OPT7_QUICK_LOAD_SENSE) !== 0))
+        this.publishProperty('time_format', onOff((rec[CLOCK_SETTINGS_OFFSET] & TIME_FORMAT_MASK) !== 0))
+        this.publishProperty('date_display', onOff((rec[CLOCK_SETTINGS_OFFSET] & DATE_DISPLAY_MASK) !== 0))
         this.publishProperty('melody', ENDING_MELODY.map(rec[MELODY_OFFSET]))
         this.publishProperty('splash_screen', SPLASH_SCREEN.map(rec[SPLASH_SCREEN_OFFSET]))
         this.publishProperty(
