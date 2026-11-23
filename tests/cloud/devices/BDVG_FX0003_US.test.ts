@@ -690,7 +690,7 @@ describe('BDVG_FX0003_US', () => {
             energy_saver: 'OFF',
             keep_fresh: 'OFF',
             clock_display: 'OFF',
-            time_format: '12-hour',
+            time_format: 'OFF',
             date_display: 'OFF',
             melody: 'Normal',
             splash_screen: 'Snowman 1', // what the app showed until it was changed on 09-25
@@ -2420,8 +2420,12 @@ describe('BDVG_FX0003_US confirmed clock settings', () => {
         const { ha, thinq, dev } = makeDevice()
         dev.publishConfig()
         const c = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-        assert.deepEqual(c.time_format.options, ['12-hour', '24-hour'])
+        assert.equal(c.time_format.name, 'Clock 24 hour')
+        assert.equal(c.date_display.name, 'Clock date display')
+        assert.equal(c.time_format.options, undefined)
         for (const key of ['time_format', 'date_display']) {
+            assert.equal(c[key].platform, 'switch')
+            assert.equal(c[key].device_class, 'switch')
             assert.equal(c[key].entity_category, 'config')
             assert.equal(c[key].optimistic, false)
             assert.equal(c[key].retain, false)
@@ -2436,7 +2440,7 @@ describe('BDVG_FX0003_US confirmed clock settings', () => {
                         thinq.onData(frame)
                         const p = ha.devices[DEVICE_ID].properties
                         assert.equal(p.clock_display, shown ? 'ON' : 'OFF')
-                        assert.equal(p.time_format, format ? '24-hour' : '12-hour')
+                        assert.equal(p.time_format, format ? 'ON' : 'OFF')
                         assert.equal(p.date_display, date ? 'ON' : 'OFF')
                         assert.equal(p.keep_fresh, 'ON')
                     }
@@ -2446,8 +2450,8 @@ describe('BDVG_FX0003_US confirmed clock settings', () => {
     })
     test('exact singleton encoding; accepted actual E6 feedback only, never requested echoes', () => {
         for (const [key, value, prop, raw] of [
-            ['time_format', '24-hour', 0x59, 1],
-            ['time_format', '12-hour', 0x59, 0],
+            ['time_format', 'ON', 0x59, 1],
+            ['time_format', 'OFF', 0x59, 0],
             ['date_display', 'ON', 0x5a, 1],
             ['date_display', 'OFF', 0x5a, 0],
         ] as const)
@@ -2469,7 +2473,7 @@ describe('BDVG_FX0003_US confirmed clock settings', () => {
     })
     test('successful E6 with unchanged actual setting never echoes the requested format/date', () => {
         for (const [key, value, prop] of [
-            ['time_format', '24-hour', 0x59],
+            ['time_format', 'ON', 0x59],
             ['date_display', 'ON', 0x5a],
         ] as const) {
             const { ha, thinq, dev } = makeDevice()
@@ -2484,18 +2488,19 @@ describe('BDVG_FX0003_US confirmed clock settings', () => {
     })
     test('missing, hidden and powered-off contexts and invalid payloads cannot send or enable clock', () => {
         const { thinq, dev } = makeDevice()
-        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('time_format', 'ON')
         dev.setProperty('date_display', 'ON')
         thinq.onData(status(record(false, 1, 1)))
-        dev.setProperty('time_format', '12-hour')
+        dev.setProperty('time_format', 'OFF')
         dev.setProperty('date_display', 'OFF')
         thinq.onData(status(record()))
-        for (const value of ['', '1', '0', '24', '12 hour', 'ON', '24-hour ']) dev.setProperty('time_format', value)
+        for (const value of ['', '1', '0', '24', '12 hour', '12-hour', '24-hour', 'on', 'OFF ', '24-hour '])
+            dev.setProperty('time_format', value)
         for (const value of ['', '1', '0', 'on', 'OFF ']) dev.setProperty('date_display', value)
         const off = record()
         off[13] = 0
         thinq.onData(status(off))
-        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('time_format', 'ON')
         dev.setProperty('date_display', 'ON')
         assert.deepEqual(thinq.outbox, [])
         assert.deepEqual(
@@ -2509,18 +2514,18 @@ describe('BDVG_FX0003_US confirmed clock settings', () => {
         const clock = ctx.mock.method(Date, 'now', () => now)
         const { ha, thinq, dev } = makeDevice()
         thinq.onData(status(record()))
-        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('time_format', 'ON')
         const after = record(true, 1, 0)
         thinq.onData(writeReply(thinq.outbox[0], after))
-        assert.equal(ha.devices[DEVICE_ID].properties.time_format, '24-hour')
+        assert.equal(ha.devices[DEVICE_ID].properties.time_format, 'ON')
         clock.mock.mockImplementation(() => now + 29_999)
         thinq.onData(status(record(false, 0, 1)))
-        assert.equal(ha.devices[DEVICE_ID].properties.time_format, '24-hour')
+        assert.equal(ha.devices[DEVICE_ID].properties.time_format, 'ON')
         assert.equal(ha.devices[DEVICE_ID].properties.date_display, 'ON')
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'OFF')
         clock.mock.mockImplementation(() => now + 30_001)
         thinq.onData(status(record(false, 0, 1)))
-        assert.equal(ha.devices[DEVICE_ID].properties.time_format, '12-hour')
+        assert.equal(ha.devices[DEVICE_ID].properties.time_format, 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.date_display, 'ON')
         assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /expired/)
         dev.drop()
@@ -2532,11 +2537,11 @@ describe('BDVG_FX0003_US confirmed clock settings', () => {
         const after = record(true)
         thinq.onData(writeReply(thinq.outbox[0], after))
         assert.equal(ha.devices[DEVICE_ID].properties.clock_display, 'ON')
-        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('time_format', 'ON')
         dev.setProperty('date_display', 'ON')
         assert.equal(thinq.outbox.length, 1)
         thinq.onData(status(after))
-        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('time_format', 'ON')
         assert.equal(thinq.outbox.length, 2)
         dev.drop()
     })
@@ -2544,7 +2549,7 @@ describe('BDVG_FX0003_US confirmed clock settings', () => {
         const { ha, thinq, dev } = makeDevice()
         thinq.onData(status(record()))
         dev.setProperty('buzzer', 'High')
-        dev.setProperty('time_format', '24-hour')
+        dev.setProperty('time_format', 'ON')
         dev.setProperty('date_display', 'ON')
         const rec = record(false, 1, 1)
         thinq.onData(status(rec))

@@ -69,7 +69,6 @@ const PROP_KEEP_FRESH = 0x57
 const PROP_CLOCK_DISPLAY = 0x58
 const PROP_TIME_FORMAT = 0x59
 const PROP_DATE_DISPLAY = 0x5a
-const TIME_FORMAT = Enum.of({ '12-hour': 0, '24-hour': 1 })
 
 const COURSE_DOWNLOADED = 0xff
 const CYCLE = Enum.of({ start: 1, pause: 2, resume: 3 })
@@ -553,14 +552,14 @@ export default class Device extends AABBDevice {
                         entity_category: 'config',
                     },
                     time_format: {
-                        platform: 'select',
+                        platform: 'switch',
+                        device_class: 'switch',
                         unique_id: '$deviceid-time_format',
                         state_topic: '$this/time_format',
                         command_topic: '$this/time_format/set',
-                        options: TIME_FORMAT.options,
                         retain: false,
                         optimistic: false,
-                        name: 'Time format',
+                        name: 'Clock 24 hour',
                         icon: 'mdi:clock-outline',
                         entity_category: 'config',
                     },
@@ -572,7 +571,7 @@ export default class Device extends AABBDevice {
                         command_topic: '$this/date_display/set',
                         retain: false,
                         optimistic: false,
-                        name: 'Date display',
+                        name: 'Clock date display',
                         icon: 'mdi:calendar',
                         entity_category: 'config',
                     },
@@ -961,8 +960,7 @@ export default class Device extends AABBDevice {
         } else if (prop === 'clock_display') {
             if (value === 'ON' || value === 'OFF') this.writeProps(PROP_CLOCK_DISPLAY, value === 'ON' ? 1 : 0)
         } else if (prop === 'time_format') {
-            const idx = TIME_FORMAT.unmap(value)
-            if (idx !== undefined) this.writeProps(PROP_TIME_FORMAT, idx)
+            if (value === 'ON' || value === 'OFF') this.writeProps(PROP_TIME_FORMAT, value === 'ON' ? 1 : 0)
         } else if (prop === 'date_display') {
             if (value === 'ON' || value === 'OFF') this.writeProps(PROP_DATE_DISPLAY, value === 'ON' ? 1 : 0)
         } else if (prop === 'melody') {
@@ -1171,7 +1169,7 @@ export default class Device extends AABBDevice {
         else if (prop === PROP_SPLASH_SCREEN) this.publishProperty('splash_screen', SPLASH_SCREEN.map(raw))
         else if (prop === PROP_KEEP_FRESH) this.publishProperty('keep_fresh', onOff(raw !== 0))
         else if (prop === PROP_CLOCK_DISPLAY) this.publishProperty('clock_display', onOff(raw !== 0))
-        else if (prop === PROP_TIME_FORMAT) this.publishProperty('time_format', TIME_FORMAT.map(raw))
+        else if (prop === PROP_TIME_FORMAT) this.publishProperty('time_format', onOff(raw !== 0))
         else if (prop === PROP_DATE_DISPLAY) this.publishProperty('date_display', onOff(raw !== 0))
         else if (prop === PROP_CYCLE_OPTIMIZATION) this.publishProperty('cycle_optimization', onOff(raw !== 0))
     }
@@ -1338,7 +1336,7 @@ export default class Device extends AABBDevice {
             PROP_TIME_FORMAT,
             'time_format',
             bit(rec[OPT5_OFFSET], OPT5_TIME_FORMAT),
-            TIME_FORMAT.map(bit(rec[OPT5_OFFSET], OPT5_TIME_FORMAT)),
+            onOff((rec[OPT5_OFFSET] & OPT5_TIME_FORMAT) !== 0),
         )
         this.publishSetting(
             PROP_DATE_DISPLAY,
