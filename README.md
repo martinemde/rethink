@@ -194,16 +194,14 @@ Large Load Dry, X Large Load Dry. Downloaded courses are not supported. Normal,
 Bedding and Towels have confirmed Smart Pairing evidence; other labels use the
 established ordinary dryer course IDs, not individually tested pairing values.
 
-The latest reported dryer state must be Off, Standby, End, or End remote maintain
-on, both when queued and when dispatched. Missing, unknown, active or paused
-states are rejected. This is the last report, not proof of current physical state;
-a silent Off dryer is allowed without an arbitrary report-age limit. Power/course
-boundaries invalidate this context until a new status report; no query is sent.
-Pairing uses the same own/bridge FIFO and fail-closed 3000ms timeout as other
-writes. There is no retry. A matching E6 result updates only existing command
-problem diagnostics; its appended record does not change selected course/options.
-Neither success nor unchanged status proves a pending recommendation, expiry or
-clearing. A new explicit command is needed for each recommendation.
+The dryer selects the recommended course at its next power-on. In captures,
+recommendations sent while it was Off showed up a few seconds after the next
+power-on; one sent while it was on was accepted without changing the current
+course. The command is sent in any state: the dryer accepts or refuses it in its
+own reply, which feeds the existing command problem diagnostics. It shares the
+own/bridge FIFO and 3000ms timeout with other writes, with no retry. Its reply
+record does not change the selected course or options. Nothing reports a pending
+recommendation, so send a new one for each load.
 
 ## Management
 

@@ -661,7 +661,6 @@ export default class Device extends AABBDevice {
     // by a record with a course.
     private problem?: string
     private course?: { code: number; downloaded: number; on: boolean }
-    private pairingState?: number
 
     private setProblem(reason: string | undefined) {
         if (reason === this.problem) return
@@ -700,7 +699,6 @@ export default class Device extends AABBDevice {
     private acceptedPower?: { value: boolean; expires: number }
 
     private boundary() {
-        this.pairingState = undefined
         this.acceptedPower = undefined
         this.generation++
         this.previousCourse = undefined
@@ -709,7 +707,6 @@ export default class Device extends AABBDevice {
     }
 
     drop() {
-        this.pairingState = undefined
         this.acceptedPower = undefined
         this.accepted.clear()
         this.pending.clear()
@@ -836,25 +833,13 @@ export default class Device extends AABBDevice {
         )
     }
 
-    private pairingAllowed() {
-        if (this.writesBlocked) return false
-        if (this.pairingState === undefined) {
-            this.setProblem('Smart Pairing needs a reported dryer status')
-            return false
-        }
-        if (![0, 1, 4, 22].includes(this.pairingState)) {
-            this.setProblem('Smart Pairing needs an idle dryer')
-            return false
-        }
-        return true
-    }
-
+    // The dryer takes the recommended course at its next power-on and answers for itself in the E6 reply.
     private writeSmartPairing(course: number) {
-        if (!this.pairingAllowed()) return
+        if (this.writesBlocked) return
         this.pendingBundle = undefined
         this.group++
         this.queueWrite(() => {
-            if (!this.pairingAllowed()) return
+            if (this.writesBlocked) return
             return Buffer.from([...SET_SMART_PAIRING, course])
         })
     }
@@ -1192,9 +1177,6 @@ export default class Device extends AABBDevice {
     // After a remote power change the dryer may send no record, only these events.
     private processEvent(payload: Buffer) {
         const on = payload[EVENT_POWER_OFFSET] !== 0
-        // Event power evidence is not an idle status record.
-        if (this.pairingState !== undefined && (this.pairingState !== STATE_POWEROFF) !== on)
-            this.pairingState = undefined
         if (!on) this.completionState = 'unarmed'
         if (!on && this.course?.on) {
             this.boundary()
@@ -1265,7 +1247,6 @@ export default class Device extends AABBDevice {
         if ([0, 1].includes(state)) this.completionState = 'unarmed'
         else if ([7, 8].includes(state)) this.completionState = 'armed'
         this.takeInCourse(rec)
-        this.pairingState = state
         this.bundle.set('steam', bit(rec[OPT2_OFFSET], OPT2_STEAM))
         this.bundle.set('damp_dry_signal', bit(rec[OPT1_OFFSET], OPT1_DAMP_DRY_SIGNAL))
         this.bundle.set('energy_saver', bit(rec[OPT2_OFFSET], OPT2_ENERGY_SAVER))

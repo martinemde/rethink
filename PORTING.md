@@ -330,8 +330,13 @@ Home Assistant. Its optimistic selection is only the last request, initially
 unknown; it does not represent a pending recommendation. The original MQTT route
 below remains supported. There is no automatic reset.
 
+The original last-reported idle gate was removed on 2026-11-25. It was a
+precaution, not observed dryer behavior. An Off dryer often sends no status
+after a reconnect, so the gate dropped 8 of 12 washer-finished recommendations
+from Nov 15 to Nov 22. Every recommendation that reached the dryer was accepted.
+
 `smart_pairing/set` is command-only, using the existing non-retained MQTT command
-route; see README for exact topic, labels and last-reported idle gate. The body is
+route; see README for exact topic and labels. The body is
 `F0 E5 00 01 01 FF 02 3D 01 0A <course>`, distinct from normal course-setting
 header `00 02 01 FF`. The shared FIFO matches header family and exact property
 sets for E6; transport receipts do not settle a write. Smart Pairing's 42-byte

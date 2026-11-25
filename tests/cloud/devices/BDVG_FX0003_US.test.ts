@@ -2616,13 +2616,10 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
         dev.drop()
     })
 
-    test('idle including silent Off accepts recommendation labels without changing reported course or state', (t) => {
-        t.mock.timers.enable({ apis: ['Date'] })
-        for (const state of [0, 1, 4, 22]) {
+    test('any state, including none reported since connect, sends recommendation labels without changing reported course or state', () => {
+        for (const state of [undefined, 0, 1, 4, 7, 22]) {
             const { ha, thinq, dev } = makeDevice()
-            thinq.onData(status(state))
-            t.mock.timers.tick(3_600_000)
-            dev.start()
+            if (state !== undefined) thinq.onData(status(state))
             for (const [label, code] of [
                 ['Normal', 7],
                 ['Bedding', 4],
@@ -2647,7 +2644,7 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
                 )
                 for (const key of ['course', 'temp', 'dry_level', 'dry_time', 'power', 'status'])
                     assert.equal(ha.devices[DEVICE_ID].properties[key], before[key])
-                assert.equal(ha.devices[DEVICE_ID].properties.problem, 'OFF')
+                assert.notEqual(ha.devices[DEVICE_ID].properties.problem, 'ON')
             }
             assert.equal(thinq.outbox.length, 4)
             assert.equal(ha.devices[DEVICE_ID].config!.components.smart_pairing, undefined)
@@ -2656,13 +2653,8 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
         }
     })
 
-    test('absent, active, paused, unknown and dropped contexts reject; downloaded and invalid labels never send', () => {
+    test('downloaded and invalid labels never send, nor does anything after drop', () => {
         const { thinq, dev } = makeDevice()
-        dev.setProperty('course_recommendation', 'Normal')
-        for (const state of [2, 3, 5, 7, 8, 9, 10, 14, 23, 24, 255]) {
-            thinq.onData(status(state))
-            dev.setProperty('course_recommendation', 'Normal')
-        }
         thinq.onData(status(0))
         for (const value of ['', '7', 'normal', 'Normal ', 'Rack Dry', 'Wrinkle Prevention', 'ON'])
             dev.setProperty('course_recommendation', value)
@@ -2699,18 +2691,15 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
         dev.drop()
     })
 
-    test('dispatch rechecks reported state behind bridge; pairing record cannot erase bundle or select a course', () => {
+    test('pairing queues behind bridge writes; its record cannot erase bundle or select a course', () => {
         const { ha, thinq, dev } = makeDevice()
         thinq.onData(status(1))
         const chime = AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0, 2, 1, 0xff, 1, 0x13, 1]))
         sendCloud(thinq, chime)
         dev.setProperty('smart_pairing', 'Towels')
-        thinq.onData(status(7))
-        thinq.onData(writeReply(chime))
         assert.equal(thinq.outbox.length, 1)
-        assert.match(String(ha.devices[DEVICE_ID].properties.problem_reason), /idle/)
-        thinq.onData(status(1))
-        dev.setProperty('smart_pairing', 'Towels')
+        thinq.onData(writeReply(chime))
+        assert.equal(thinq.outbox.length, 2)
         dev.setProperty('temp', 'Low')
         thinq.onData(reply(thinq.outbox[1])) // Off appended record must not clear the selected course/bundle
         assert.equal(thinq.outbox.length, 3)
@@ -2737,25 +2726,6 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
         rec[5] = 7
         thinq.onData(writeReply(thinq.outbox[1], rec))
         assert.equal(thinq.outbox.length, 3)
-        dev.drop()
-    })
-
-    test('event-only power transitions invalidate idle context until a fresh status', () => {
-        const { thinq, dev } = makeDevice()
-        thinq.onData(status(0))
-        const payload = Buffer.alloc(18)
-        payload[9] = 1
-        thinq.onData(longFrame(3, payload))
-        dev.setProperty('smart_pairing', 'Towels')
-        assert.equal(thinq.outbox.length, 0)
-        thinq.onData(status(1))
-        payload[9] = 0
-        thinq.onData(longFrame(3, payload))
-        dev.setProperty('smart_pairing', 'Normal')
-        assert.equal(thinq.outbox.length, 0)
-        thinq.onData(status(0))
-        dev.setProperty('smart_pairing', 'Towels')
-        assert.equal(thinq.outbox.length, 1)
         dev.drop()
     })
 
