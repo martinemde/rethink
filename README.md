@@ -194,14 +194,16 @@ Large Load Dry, X Large Load Dry. Downloaded courses are not supported. Normal,
 Bedding and Towels have confirmed Smart Pairing evidence; other labels use the
 established ordinary dryer course IDs, not individually tested pairing values.
 
-The dryer selects the recommended course at its next power-on. In captures,
-recommendations sent while it was Off showed up a few seconds after the next
-power-on; one sent while it was on was accepted without changing the current
-course. The command is sent in any state: the dryer accepts or refuses it in its
-own reply, which feeds the existing command problem diagnostics. It shares the
-own/bridge FIFO and 3000ms timeout with other writes, with no retry. Its reply
-record does not change the selected course or options. Nothing reports a pending
-recommendation, so send a new one for each load.
+The dryer selects the recommended course at its next power-on, but only if the
+recommendation arrives while it is Off. One received while it is on is accepted
+and then discarded, even across an off/on cycle. So while the dryer is reported on,
+rethink holds the latest recommendation and sends it when the dryer reports Off;
+when Off or not yet reported (an Off dryer can reconnect silently), it sends at
+once. A held recommendation is lost if rethink restarts or the dryer reconnects
+before turning off. The dryer's reply feeds the existing command problem
+diagnostics. Sends share the own/bridge FIFO and 3000ms timeout with other writes,
+with no retry. The reply record does not change the selected course or options.
+Nothing reports a pending recommendation, so send a new one for each load.
 
 ## Management
 

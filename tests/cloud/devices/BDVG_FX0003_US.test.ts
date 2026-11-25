@@ -2616,8 +2616,8 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
         dev.drop()
     })
 
-    test('any state, including none reported since connect, sends recommendation labels without changing reported course or state', () => {
-        for (const state of [undefined, 0, 1, 4, 7, 22]) {
+    test('Off or no report since connect sends recommendation labels without changing reported course or state', () => {
+        for (const state of [undefined, 0]) {
             const { ha, thinq, dev } = makeDevice()
             if (state !== undefined) thinq.onData(status(state))
             for (const [label, code] of [
@@ -2651,6 +2651,37 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
             assert.equal(ha.devices[DEVICE_ID].properties.smart_pairing, undefined)
             dev.drop()
         }
+    })
+
+    test('while on, the latest recommendation waits and is sent when the dryer reports Off', () => {
+        for (const state of [1, 4, 7, 22]) {
+            const { thinq, dev } = makeDevice()
+            thinq.onData(status(state))
+            dev.setProperty('course_recommendation', 'Bedding')
+            dev.setProperty('smart_pairing', 'Towels')
+            thinq.onData(status(state))
+            assert.equal(thinq.outbox.length, 0)
+            thinq.onData(status(0))
+            assert.deepEqual(thinq.outbox, [
+                AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0, 1, 1, 0xff, 2, 0x3d, 1, 0x0a, 2])),
+            ])
+            thinq.onData(status(0))
+            assert.equal(thinq.outbox.length, 1)
+            dev.drop()
+        }
+    })
+
+    test('a power-off event without a status record also sends the waiting recommendation', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.onData(status(1))
+        dev.setProperty('course_recommendation', 'Normal')
+        assert.equal(thinq.outbox.length, 0)
+        const payload = Buffer.alloc(18)
+        thinq.onData(longFrame(3, payload))
+        assert.deepEqual(thinq.outbox, [
+            AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0, 1, 1, 0xff, 2, 0x3d, 1, 0x0a, 7])),
+        ])
+        dev.drop()
     })
 
     test('downloaded and invalid labels never send, nor does anything after drop', () => {
@@ -2693,13 +2724,14 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
 
     test('pairing queues behind bridge writes; its record cannot erase bundle or select a course', () => {
         const { ha, thinq, dev } = makeDevice()
-        thinq.onData(status(1))
+        thinq.onData(status(0))
         const chime = AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0, 2, 1, 0xff, 1, 0x13, 1]))
         sendCloud(thinq, chime)
         dev.setProperty('smart_pairing', 'Towels')
         assert.equal(thinq.outbox.length, 1)
         thinq.onData(writeReply(chime))
         assert.equal(thinq.outbox.length, 2)
+        thinq.onData(status(1))
         dev.setProperty('temp', 'Low')
         thinq.onData(reply(thinq.outbox[1])) // Off appended record must not clear the selected course/bundle
         assert.equal(thinq.outbox.length, 3)

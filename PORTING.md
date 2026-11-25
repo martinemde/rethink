@@ -335,6 +335,11 @@ precaution, not observed dryer behavior. An Off dryer often sends no status
 after a reconnect, so the gate dropped 8 of 12 washer-finished recommendations
 from Nov 15 to Nov 22. Every recommendation that reached the dryer was accepted.
 
+Captures on 2026-11-25 showed the dryer applies a recommendation only if it was
+received while Off: sent while on, it was accepted, then ignored even after an
+immediate off/on cycle. rethink now holds the latest recommendation while the
+dryer is reported on and sends it on the Off report or power-off event.
+
 `smart_pairing/set` is command-only, using the existing non-retained MQTT command
 route; see README for exact topic and labels. The body is
 `F0 E5 00 01 01 FF 02 3D 01 0A <course>`, distinct from normal course-setting

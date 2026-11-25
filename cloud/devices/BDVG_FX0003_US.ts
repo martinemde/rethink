@@ -661,6 +661,9 @@ export default class Device extends AABBDevice {
     // by a record with a course.
     private problem?: string
     private course?: { code: number; downloaded: number; on: boolean }
+    private powered?: boolean
+    // The dryer accepts a recommendation while on, then discards it, even across an off/on cycle.
+    private waitingRecommendation?: number
 
     private setProblem(reason: string | undefined) {
         if (reason === this.problem) return
@@ -833,6 +836,12 @@ export default class Device extends AABBDevice {
         )
     }
 
+    // Off or unknown (an Off dryer can reconnect silently) sends now; on waits for the dryer to report Off.
+    private recommendCourse(course: number) {
+        if (this.powered) this.waitingRecommendation = course
+        else this.writeSmartPairing(course)
+    }
+
     // The dryer takes the recommended course at its next power-on and answers for itself in the E6 reply.
     private writeSmartPairing(course: number) {
         if (this.writesBlocked) return
@@ -956,7 +965,7 @@ export default class Device extends AABBDevice {
             if (idx !== undefined) this.writeProps(PROP_SPLASH_SCREEN, idx)
         } else if (prop === 'course_recommendation' || prop === 'smart_pairing') {
             const code = COURSE.unmap(value)
-            if (code !== undefined) this.writeSmartPairing(code)
+            if (code !== undefined) this.recommendCourse(code)
         } else if (prop === 'course') {
             const code = COURSE.unmap(value)
             const downloaded = DOWNLOADED_COURSE.unmap(value)
@@ -1160,6 +1169,11 @@ export default class Device extends AABBDevice {
     }
 
     private publishPower(observed: boolean) {
+        this.powered = observed
+        if (!observed && this.waitingRecommendation !== undefined) {
+            this.writeSmartPairing(this.waitingRecommendation)
+            this.waitingRecommendation = undefined
+        }
         const accepted = this.acceptedPower
         if (accepted) {
             if (observed === accepted.value || Date.now() >= accepted.expires) {
