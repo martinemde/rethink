@@ -68,6 +68,19 @@ const PROP_SPLASH_SCREEN = 0x51
 const PROP_KEEP_FRESH = 0x57
 const PROP_CURRENT_TIME_DISPLAY = 0x58 // modelJSON currentTimeDisplay
 
+// Course recommendation (the app's Smart Pairing), as the ThinQ app sent it for Normal:
+//
+//     aa 0f f0 e5 00 01 01 ff 02 3d 01 0a 07 b5 bb
+//                 └─┬─┘       │  └─┬─┘ └─┬─┘
+//                   │         │    │     └ course, in the rec[5] numbering
+//                   │         │    └ 0x3d = 1, always part of the command; not known on its own
+//                   │         └ count
+//                   └ 00 01 where a property write has 00 02
+//
+// The dryer takes the course at its next power-on, but only if the recommendation arrives while it is off.
+// One sent while it is on is accepted, then discarded, even across an off/on cycle.
+const SET_COURSE_RECOMMENDATION = [0xf0, 0xe5, 0x00, 0x01, 0x01, 0xff, 0x02, 0x3d, 0x01, 0x0a]
+
 const COURSE_DOWNLOADED = 0xff
 const CYCLE = Enum.of({ start: 1, pause: 2, resume: 3 })
 
@@ -327,6 +340,17 @@ export default class Device extends AABBDevice {
                         name: 'Course',
                         icon: 'mdi:pin-outline',
                     },
+                    course_recommendation: {
+                        platform: 'select',
+                        unique_id: '$deviceid-course_recommendation',
+                        command_topic: '$this/course_recommendation/set',
+                        retain: false,
+                        optimistic: true,
+                        options: COURSE.options,
+                        name: 'Course recommendation',
+                        icon: 'mdi:tumble-dryer',
+                        entity_category: 'config',
+                    },
                     start: {
                         platform: 'button',
                         unique_id: '$deviceid-start',
@@ -580,6 +604,10 @@ export default class Device extends AABBDevice {
     // by a record with a course.
     private problem?: string
     private course?: { code: number; on: boolean }
+    // Power as last reported by a record or event; unknown until then (an off dryer can reconnect silently)
+    private powered?: boolean
+    // The latest recommendation received while the dryer was on, sent once it reports off
+    private heldRecommendation?: number
 
     private setProblem(reason: string | undefined) {
         if (reason === this.problem) return
@@ -600,6 +628,18 @@ export default class Device extends AABBDevice {
     private writeProps(...pairs: number[]) {
         const inner = Buffer.from([...SET_PROPERTY, pairs.length / 2, ...pairs])
         this.queueWrite(() => inner)
+    }
+
+    private recommendCourse(code: number) {
+        if (this.powered) this.heldRecommendation = code
+        else this.queueWrite(() => Buffer.from([...SET_COURSE_RECOMMENDATION, code]))
+    }
+
+    private takeInPower(on: boolean) {
+        this.powered = on
+        if (on || this.heldRecommendation === undefined) return
+        this.recommendCourse(this.heldRecommendation)
+        this.heldRecommendation = undefined
     }
 
     protected writeType(inner: Buffer) {
@@ -691,6 +731,9 @@ export default class Device extends AABBDevice {
         } else if (prop === 'splash_screen') {
             const idx = SPLASH_SCREEN.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_SPLASH_SCREEN, idx)
+        } else if (prop === 'course_recommendation') {
+            const code = COURSE.unmap(value)
+            if (code !== undefined) this.recommendCourse(code)
         } else if (prop === 'course') {
             const code = COURSE.unmap(value)
             const downloaded = DOWNLOADED_COURSE.unmap(value)
@@ -742,7 +785,9 @@ export default class Device extends AABBDevice {
     private processWriteReply(buf: Buffer) {
         const write = this.writeAnswered(SET_PROPERTY[1])
         if (!write) return
-        this.takeInWrite(write.inner, buf)
+        // A recommendation selects nothing now: its reply's course result and record are not a course change.
+        const recommendation = write.inner.subarray(0, 4).equals(Buffer.from(SET_COURSE_RECOMMENDATION.slice(0, 4)))
+        if (!recommendation) this.takeInWrite(write.inner, buf)
         if (!write.own) return
         const count = buf[WRITE_REPLY_PROP_OFFSET - 1] ?? 0
         const failed = [...Array(count).keys()]
@@ -790,6 +835,7 @@ export default class Device extends AABBDevice {
         if (!on) this.completionState = 'unarmed'
         if (!on && this.course) this.course = { ...this.course, on: false }
         this.publishProperty('power', onOff(on))
+        this.takeInPower(on)
         if (payload[EVENT_ID_OFFSET] === EVENT_ID_DOOR)
             this.publishProperty('door', onOff(payload[EVENT_DOOR_OFFSET] === DOOR_OPEN))
     }
@@ -829,6 +875,7 @@ export default class Device extends AABBDevice {
         this.bundle.set('wrinkle_care', bit(rec[OPT1_OFFSET], OPT1_WRINKLE_CARE))
 
         this.publishProperty('power', onOff(!isOff))
+        this.takeInPower(!isOff)
         this.publishProperty('status', STATE.map(state))
         this.publishProperty('buzzer', BUZZER.map(rec[BUZZER_OFFSET]))
         this.publishProperty('remaining_time', isOff ? 0 : rec.readUInt16BE(REMAIN_TIME_OFFSET))

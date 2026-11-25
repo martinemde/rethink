@@ -137,6 +137,19 @@ See also the [Home Assistant App](https://github.com/anszom/rethink-ha/tree/mast
 
 [![Open your Home Assistant instance and show the add app repository dialog with the repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fanszom%2Frethink-ha)
 
+## Dryer course recommendation
+
+For BDVG_FX0003_US, the **Course recommendation** Configuration select recommends a
+course for the next load, like the ThinQ app's Smart Pairing. Publish a non-retained
+built-in course label (e.g. `Towels`) to `rethink/<id>/course_recommendation/set`, or use
+`select.select_option`. The selection shown is Home Assistant's optimistic last request,
+not readback from the dryer.
+
+The dryer takes the course at its next power-on, but only if the recommendation arrives
+while it is off. So while the dryer is reported on, rethink holds the latest one and sends
+it when the dryer reports off. A held recommendation is lost if rethink restarts or the
+dryer reconnects first.
+
 ## Management
 
 A simple web interface is available on a user-defined port (default: 44401). The interface supports:

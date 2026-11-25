@@ -2,6 +2,7 @@ import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import crc16 from '@/util/crc16'
 import DUT from '@/cloud/devices/BDVG_FX0003_US'
+import AABBDevice from '@/cloud/devices/aabb_device'
 import type { Metadata } from '@/cloud/thinq'
 import { MockHAConnection, MockThinq2Device, buf, hex } from '@/tests/helpers/mocks'
 
@@ -1456,5 +1457,80 @@ describe('BDVG_FX0003_US completion notifications', () => {
         assert.equal(events().length, 0)
         thinq.emit('data', completionNotification())
         assert.equal(events().length, 1)
+    })
+})
+
+// The ThinQ app recommending Normal for the next load (Smart Pairing).
+const APP_RECOMMEND_NORMAL = 'AA0FF0E5000101FF023D010A07B5BB'
+
+describe('BDVG_FX0003_US course recommendation', () => {
+    const recommendation = (code: number) =>
+        hex(AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0x00, 0x01, 0x01, 0xff, 0x02, 0x3d, 0x01, 0x0a, code])))
+    // Synthetic: the property-write reply layout, with the recommendation's header and properties, carrying the
+    // Timed Dry record from COURSE_TIMED_DRY_REPLY.
+    const reply = (result = 0x00) =>
+        AABBDevice.frame(
+            Buffer.concat([
+                Buffer.from([0x30, 0xe6, 0x00, 0x01, 0x01, 0xff, 0x02, 0x3d, result, 0x0a, result]),
+                COURSE_TIMED_DRY_REPLY.subarray(11, -2),
+            ]),
+        )
+
+    test('with no record yet, a recommendation goes out at once, as the app sent it', () => {
+        const { thinq, dev } = makeDevice()
+        dev.setProperty('course_recommendation', 'Normal')
+        assert.deepEqual(thinq.outbox.map(hex), [APP_RECOMMEND_NORMAL])
+    })
+
+    test('while off, each recommendation goes out in turn', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.emit('data', EB_OFF)
+        dev.setProperty('course_recommendation', 'Bedding')
+        dev.setProperty('course_recommendation', 'Towels')
+        thinq.emit('data', reply())
+        assert.deepEqual(thinq.outbox.map(hex), [recommendation(4), recommendation(2)])
+    })
+
+    test("the reply's record is not a course change; a refusal is a problem", () => {
+        const { ha, thinq, dev } = makeDevice()
+        const p = () => ha.devices[DEVICE_ID].properties
+        thinq.emit('data', EB_OFF)
+        dev.setProperty('course_recommendation', 'Towels')
+        thinq.emit('data', reply())
+        assert.equal(p().course, 'None')
+        assert.equal(p().problem, undefined)
+        dev.setProperty('course_recommendation', 'Towels')
+        thinq.emit('data', reply(0x03))
+        assert.equal(p().course, 'None')
+        assert.deepEqual([p().problem, p().problem_reason], ['ON', 'Command refused (0x03)'])
+    })
+
+    test('while on, only the latest recommendation is held, and sent once the dryer reports off', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.emit('data', EB_AI_DRY)
+        dev.setProperty('course_recommendation', 'Bedding')
+        dev.setProperty('course_recommendation', 'Towels')
+        thinq.emit('data', DRYING)
+        assert.deepEqual(thinq.outbox, [])
+        thinq.emit('data', EB_OFF)
+        assert.deepEqual(thinq.outbox.map(hex), [recommendation(2)])
+        thinq.emit('data', reply())
+        thinq.emit('data', EB_OFF)
+        assert.equal(thinq.outbox.length, 1)
+    })
+
+    test('a power-off event without a record sends the held recommendation', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.emit('data', EB_AI_DRY)
+        dev.setProperty('course_recommendation', 'Normal')
+        thinq.emit('data', POWER_OFF_EVENT)
+        assert.deepEqual(thinq.outbox.map(hex), [APP_RECOMMEND_NORMAL])
+    })
+
+    test('downloaded courses and unknown labels send nothing', () => {
+        const { thinq, dev } = makeDevice()
+        for (const value of ['Rack Dry', 'Wrinkle Prevention', 'normal', '7', ''])
+            dev.setProperty('course_recommendation', value)
+        assert.deepEqual(thinq.outbox, [])
     })
 })
