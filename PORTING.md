@@ -327,8 +327,9 @@ acceptance are separately owned by the parent operator.
 
 The later `course_recommendation` Configuration select exposes this command in
 Home Assistant. Its optimistic selection is only the last request, initially
-unknown; it does not represent a pending recommendation. The original MQTT route
-below remains supported. There is no automatic reset.
+unknown; it does not represent a pending recommendation. There is no automatic
+reset. The original `smart_pairing/set` route was removed on 2026-11-25;
+`course_recommendation/set` is the only command route.
 
 The original last-reported idle gate was removed on 2026-11-25. It was a
 precaution, not observed dryer behavior. An Off dryer often sends no status
@@ -340,8 +341,8 @@ received while Off: sent while on, it was accepted, then ignored even after an
 immediate off/on cycle. rethink now holds the latest recommendation while the
 dryer is reported on and sends it on the Off report or power-off event.
 
-`smart_pairing/set` is command-only, using the existing non-retained MQTT command
-route; see README for exact topic and labels. The body is
+The command uses the existing non-retained MQTT command route; see README for
+the exact topic and labels. The body is
 `F0 E5 00 01 01 FF 02 3D 01 0A <course>`, distinct from normal course-setting
 header `00 02 01 FF`. The shared FIFO matches header family and exact property
 sets for E6; transport receipts do not settle a write. Smart Pairing's 42-byte

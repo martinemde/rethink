@@ -963,7 +963,7 @@ export default class Device extends AABBDevice {
         } else if (prop === 'splash_screen') {
             const idx = SPLASH_SCREEN.unmap(value)
             if (idx !== undefined) this.writeProps(PROP_SPLASH_SCREEN, idx)
-        } else if (prop === 'course_recommendation' || prop === 'smart_pairing') {
+        } else if (prop === 'course_recommendation') {
             const code = COURSE.unmap(value)
             if (code !== undefined) this.recommendCourse(code)
         } else if (prop === 'course') {

@@ -2647,8 +2647,6 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
                 assert.notEqual(ha.devices[DEVICE_ID].properties.problem, 'ON')
             }
             assert.equal(thinq.outbox.length, 4)
-            assert.equal(ha.devices[DEVICE_ID].config!.components.smart_pairing, undefined)
-            assert.equal(ha.devices[DEVICE_ID].properties.smart_pairing, undefined)
             dev.drop()
         }
     })
@@ -2658,7 +2656,7 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
             const { thinq, dev } = makeDevice()
             thinq.onData(status(state))
             dev.setProperty('course_recommendation', 'Bedding')
-            dev.setProperty('smart_pairing', 'Towels')
+            dev.setProperty('course_recommendation', 'Towels')
             thinq.onData(status(state))
             assert.equal(thinq.outbox.length, 0)
             thinq.onData(status(0))
@@ -2701,8 +2699,8 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
     test('wrong family/properties, receipt and malformed replies cannot settle pairing; refusal is diagnostic only', () => {
         const { ha, thinq, dev } = makeDevice()
         thinq.onData(status(0))
-        dev.setProperty('smart_pairing', 'Towels')
-        dev.setProperty('smart_pairing', 'Normal')
+        dev.setProperty('course_recommendation', 'Towels')
+        dev.setProperty('course_recommendation', 'Normal')
         const write = thinq.outbox[0]
         thinq.onData(writeReply(write)) // same property set, ordinary course-setting header
         thinq.onData(AABBDevice.frame(Buffer.from([0x30, 0, 0xe5, 0]))) // transport receipt only
@@ -2727,7 +2725,7 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
         thinq.onData(status(0))
         const chime = AABBDevice.frame(Buffer.from([0xf0, 0xe5, 0, 2, 1, 0xff, 1, 0x13, 1]))
         sendCloud(thinq, chime)
-        dev.setProperty('smart_pairing', 'Towels')
+        dev.setProperty('course_recommendation', 'Towels')
         assert.equal(thinq.outbox.length, 1)
         thinq.onData(writeReply(chime))
         assert.equal(thinq.outbox.length, 2)
@@ -2765,12 +2763,12 @@ describe('BDVG_FX0003_US command-only Smart Pairing', () => {
         t.mock.timers.enable({ apis: ['setTimeout'] })
         const { ha, thinq, dev } = makeDevice()
         thinq.onData(status(0))
-        dev.setProperty('smart_pairing', 'Towels')
+        dev.setProperty('course_recommendation', 'Towels')
         const write = thinq.outbox[0]
-        dev.setProperty('smart_pairing', 'Normal')
+        dev.setProperty('course_recommendation', 'Normal')
         t.mock.timers.tick(3000)
         thinq.onData(reply(write))
-        dev.setProperty('smart_pairing', 'Bedding')
+        dev.setProperty('course_recommendation', 'Bedding')
         sendCloud(thinq, write)
         t.mock.timers.tick(30_000)
         assert.equal(thinq.outbox.length, 1)

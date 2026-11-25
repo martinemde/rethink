@@ -181,8 +181,7 @@ automatic reset or pending-recommendation state.
 
 Automations can use `select.select_option`, or publish a non-retained course label
 to `rethink/<id>/course_recommendation/set` (replace `rethink` if the MQTT prefix is
-configured otherwise). The existing `rethink/<id>/smart_pairing/set` command is
-also supported. Example payload: `Towels`. This command only recommends a course;
+configured otherwise). Example payload: `Towels`. This command only recommends a course;
 it does not select the current course, power on, start, or pair automatically
 after a washer finishes.
 
